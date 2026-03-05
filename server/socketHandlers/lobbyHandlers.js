@@ -7,6 +7,8 @@ import {
   updatePlayerSocket,
   setPhase,
 } from '../rooms/roomManager.js';
+import { createInitialGameState } from '../game/GameState.js';
+import { broadcastGameState }     from './gameHandlers.js';
 
 // ---- Helper ----
 
@@ -79,7 +81,13 @@ export function registerLobbyHandlers(io, socket) {
       updatePlayerSocket(code, playerId, socket.id, true);
       socket.join(code);
       socket.emit('lobby:joined', { code, playerId, reconnected: true });
-      broadcastLobby(io, room);
+
+      if (room.phase === 'playing' && room.gameState) {
+        // Game is in progress — send them the current game state and their private tiles
+        broadcastGameState(io, room);
+      } else {
+        broadcastLobby(io, room);
+      }
       console.log(`"${existingPlayer.name}" reconnected to room ${code}`);
       return;
     }
@@ -123,8 +131,14 @@ export function registerLobbyHandlers(io, socket) {
     if (room.players.length > 6) { socket.emit('error', { message: 'Too many players (max 6).' }); return; }
 
     setPhase(roomCode, 'playing');
-    broadcastLobby(io, room);
-    // Phase 2 will add: initializeGameState(room) and emit 'game:start'
+
+    // Initialize game state: shuffle tiles, deal 6 to each player, set up board
+    const { gameState, playerTiles } = createInitialGameState(room.players);
+    room.gameState   = gameState;
+    room.playerTiles = playerTiles;
+
+    // Broadcast public game state to all players + private tile hands to each individually
+    broadcastGameState(io, room);
     console.log(`Room ${roomCode} game started with ${room.players.length} players`);
   });
 

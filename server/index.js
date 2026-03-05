@@ -3,6 +3,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import { registerLobbyHandlers } from './socketHandlers/lobbyHandlers.js';
+import { registerGameHandlers }  from './socketHandlers/gameHandlers.js';
 
 const PORT = process.env.PORT || 3001;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
@@ -32,8 +33,9 @@ const io = new Server(httpServer, {
 io.on('connection', (socket) => {
   console.log(`[+] Socket connected:    ${socket.id}`);
 
-  // Register all lobby-related event handlers for this socket
+  // Register event handlers for this socket
   registerLobbyHandlers(io, socket);
+  registerGameHandlers(io, socket);
 
   socket.on('disconnect', (reason) => {
     console.log(`[-] Socket disconnected: ${socket.id} (${reason})`);

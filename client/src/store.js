@@ -29,6 +29,10 @@ const useStore = create((set, get) => ({
   phase: 'home',
   players: [],        // [{ id, name, isConnected }]
 
+  // ---- Game state (Phase 2+) ----
+  gameState: null,  // public game state broadcast from the server
+  myTiles: [],      // this player's private tile hand
+
   // ---- UI state ----
   errorMessage: null,
 
@@ -67,7 +71,15 @@ const useStore = create((set, get) => ({
     phase: 'home',
     players: [],
     errorMessage: null,
+    gameState: null,
+    myTiles: [],
   }),
+
+  // Server broadcast updated public game state (called after every game action)
+  onGameStateUpdate: (gs) => set({ gameState: gs, phase: 'playing' }),
+
+  // Server sent our private tile hand (called after game:stateUpdate)
+  onMyTilesUpdate: (tiles) => set({ myTiles: tiles }),
 }));
 
 export default useStore;
