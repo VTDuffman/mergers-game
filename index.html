@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Expense Tracker</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f0f2f5;
+      color: #1a1a2e;
+      min-height: 100vh;
+      padding: 2rem 1rem;
+    }
+
+    .container {
+      max-width: 780px;
+      margin: 0 auto;
+    }
+
+    header {
+      margin-bottom: 2rem;
+    }
+
+    header h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      color: #1a1a2e;
+    }
+
+    header p {
+      color: #6b7280;
+      margin-top: 0.25rem;
+      font-size: 0.95rem;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08), 0 4px 16px rgba(0,0,0,0.04);
+      padding: 1.75rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .card h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      color: #374151;
+      margin-bottom: 1.25rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* Form */
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    .form-group.full { grid-column: 1 / -1; }
+
+    label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    input, select {
+      padding: 0.65rem 0.875rem;
+      border: 1.5px solid #e5e7eb;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      color: #1a1a2e;
+      background: #fafafa;
+      transition: border-color 0.15s, box-shadow 0.15s;
+      outline: none;
+      width: 100%;
+    }
+
+    input:focus, select:focus {
+      border-color: #6366f1;
+      box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
+      background: #fff;
+    }
+
+    .btn-add {
+      margin-top: 1.25rem;
+      padding: 0.7rem 1.5rem;
+      background: #6366f1;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+    }
+
+    .btn-add:hover { background: #4f46e5; }
+    .btn-add:active { transform: scale(0.98); }
+
+    /* Summary strip */
+    .summary {
+      display: flex;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .summary-card {
+      flex: 1;
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      padding: 1.25rem 1.5rem;
+    }
+
+    .summary-card .label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #9ca3af;
+      margin-bottom: 0.4rem;
+    }
+
+    .summary-card .value {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: #1a1a2e;
+    }
+
+    .summary-card.total .value { color: #6366f1; }
+
+    /* Table */
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+
+    thead th {
+      text-align: left;
+      padding: 0.6rem 1rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #9ca3af;
+      border-bottom: 1.5px solid #f3f4f6;
+    }
+
+    tbody tr {
+      border-bottom: 1px solid #f3f4f6;
+      transition: background 0.1s;
+    }
+
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: #fafafa; }
+
+    tbody td {
+      padding: 0.85rem 1rem;
+      color: #374151;
+      vertical-align: middle;
+    }
+
+    .amount-cell {
+      font-weight: 600;
+      color: #1a1a2e;
+      white-space: nowrap;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.6rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    .badge-food       { background: #fef3c7; color: #92400e; }
+    .badge-transport  { background: #dbeafe; color: #1e40af; }
+    .badge-housing    { background: #d1fae5; color: #065f46; }
+    .badge-health     { background: #fce7f3; color: #9d174d; }
+    .badge-entertainment { background: #ede9fe; color: #5b21b6; }
+    .badge-shopping   { background: #ffedd5; color: #9a3412; }
+    .badge-other      { background: #f3f4f6; color: #4b5563; }
+
+    .btn-delete {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: #d1d5db;
+      font-size: 1.1rem;
+      line-height: 1;
+      padding: 0.2rem 0.4rem;
+      border-radius: 6px;
+      transition: color 0.15s, background 0.15s;
+    }
+
+    .btn-delete:hover { color: #ef4444; background: #fef2f2; }
+
+    .empty-state {
+      text-align: center;
+      padding: 3rem 1rem;
+      color: #9ca3af;
+    }
+
+    .empty-state .icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
+    .empty-state p { font-size: 0.95rem; }
+
+    @media (max-width: 540px) {
+      .form-grid { grid-template-columns: 1fr; }
+      .form-group.full { grid-column: 1; }
+      .summary { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Expense Tracker</h1>
+      <p>Track and manage your spending in one place.</p>
+    </header>
+
+    <!-- Add Expense Form -->
+    <div class="card">
+      <h2>Add Expense</h2>
+      <form id="expense-form">
+        <div class="form-grid">
+          <div class="form-group full">
+            <label for="description">Description</label>
+            <input type="text" id="description" placeholder="e.g. Grocery run" required>
+          </div>
+          <div class="form-group">
+            <label for="amount">Amount ($)</label>
+            <input type="number" id="amount" placeholder="0.00" min="0.01" step="0.01" required>
+          </div>
+          <div class="form-group">
+            <label for="category">Category</label>
+            <select id="category" required>
+              <option value="" disabled selected>Select category</option>
+              <option value="food">Food &amp; Dining</option>
+              <option value="transport">Transport</option>
+              <option value="housing">Housing</option>
+              <option value="health">Health</option>
+              <option value="entertainment">Entertainment</option>
+              <option value="shopping">Shopping</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+        </div>
+        <button type="submit" class="btn-add">+ Add Expense</button>
+      </form>
+    </div>
+
+    <!-- Summary -->
+    <div class="summary">
+      <div class="summary-card">
+        <div class="label">Total Expenses</div>
+        <div class="value" id="count">0</div>
+      </div>
+      <div class="summary-card total">
+        <div class="label">Running Total</div>
+        <div class="value" id="total">$0.00</div>
+      </div>
+    </div>
+
+    <!-- Expenses Table -->
+    <div class="card">
+      <h2>Expenses</h2>
+      <div class="table-wrap">
+        <table id="expense-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Description</th>
+              <th>Category</th>
+              <th>Amount</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="expense-body">
+            <tr id="empty-row">
+              <td colspan="5">
+                <div class="empty-state">
+                  <div class="icon">📋</div>
+                  <p>No expenses yet. Add one above to get started.</p>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const categoryLabels = {
+      food: 'Food & Dining',
+      transport: 'Transport',
+      housing: 'Housing',
+      health: 'Health',
+      entertainment: 'Entertainment',
+      shopping: 'Shopping',
+      other: 'Other',
+    };
+
+    let expenses = JSON.parse(localStorage.getItem('expenses') || '[]');
+
+    const form = document.getElementById('expense-form');
+    const body = document.getElementById('expense-body');
+    const totalEl = document.getElementById('total');
+    const countEl = document.getElementById('count');
+
+    function formatCurrency(n) {
+      return '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    }
+
+    function formatDate(iso) {
+      const d = new Date(iso);
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+
+    function render() {
+      const emptyRow = document.getElementById('empty-row');
+
+      // Remove all existing expense rows
+      body.querySelectorAll('tr.expense-row').forEach(r => r.remove());
+
+      if (expenses.length === 0) {
+        if (!emptyRow) {
+          body.innerHTML = `<tr id="empty-row"><td colspan="5">
+            <div class="empty-state">
+              <div class="icon">📋</div>
+              <p>No expenses yet. Add one above to get started.</p>
+            </div></td></tr>`;
+        }
+      } else {
+        if (emptyRow) emptyRow.remove();
+
+        expenses.forEach((exp, i) => {
+          const tr = document.createElement('tr');
+          tr.className = 'expense-row';
+          tr.innerHTML = `
+            <td>${formatDate(exp.date)}</td>
+            <td>${escapeHtml(exp.description)}</td>
+            <td><span class="badge badge-${exp.category}">${categoryLabels[exp.category]}</span></td>
+            <td class="amount-cell">${formatCurrency(exp.amount)}</td>
+            <td><button class="btn-delete" data-index="${i}" title="Delete">✕</button></td>
+          `;
+          body.appendChild(tr);
+        });
+      }
+
+      const total = expenses.reduce((sum, e) => sum + e.amount, 0);
+      totalEl.textContent = formatCurrency(total);
+      countEl.textContent = expenses.length;
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function save() {
+      localStorage.setItem('expenses', JSON.stringify(expenses));
+    }
+
+    form.addEventListener('submit', e => {
+      e.preventDefault();
+      const description = document.getElementById('description').value.trim();
+      const amount = parseFloat(document.getElementById('amount').value);
+      const category = document.getElementById('category').value;
+
+      if (!description || isNaN(amount) || amount <= 0 || !category) return;
+
+      expenses.unshift({ id: Date.now(), date: new Date().toISOString(), description, amount, category });
+      save();
+      render();
+      form.reset();
+      document.getElementById('description').focus();
+    });
+
+    body.addEventListener('click', e => {
+      const btn = e.target.closest('.btn-delete');
+      if (!btn) return;
+      const i = parseInt(btn.dataset.index, 10);
+      expenses.splice(i, 1);
+      save();
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>
