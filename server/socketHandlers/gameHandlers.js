@@ -1,5 +1,5 @@
 import { getRoom } from '../rooms/roomManager.js';
-import { getPublicGameState } from '../game/GameState.js';
+import { getPublicGameState, checkEndGameConditions, resetGameState } from '../game/GameState.js';
 import { classifyPlacement, isLegalPlacement, findUnplayableTiles, getAdjacentChains } from '../game/boardLogic.js';
 import { drawTiles } from '../game/tileLogic.js';
 import { foundChain, growChain } from '../game/chainLogic.js';
@@ -7,6 +7,7 @@ import { validatePurchase, applyPurchase, getStockPrice } from '../game/stockLog
 import {
   initiateMerger, applySurvivorChoice, advanceMerger,
   validateMergerDecision, applyMergerDecision,
+  executeEndGamePayouts,
 } from '../game/mergerLogic.js';
 
 // ---- Helpers ----
@@ -33,6 +34,20 @@ export function broadcastGameState(io, room) {
 function addLog(gameState, message) {
   gameState.log.push({ time: Date.now(), message });
   if (gameState.log.length > 100) gameState.log.shift();
+}
+
+/**
+ * Check end-game conditions and, if met for the first time, flag them in state.
+ * Called whenever a tile placement fully resolves and we're entering BUY_STOCKS.
+ */
+function checkAndFlagEndGame(gs) {
+  if (gs.endGameAvailable) return; // already flagged — don't overwrite
+  const { canEnd, reason } = checkEndGameConditions(gs);
+  if (canEnd) {
+    gs.endGameAvailable = true;
+    gs.endGameReason    = reason;
+    addLog(gs, `End-game condition met: ${reason} The active player may declare the game over.`);
+  }
 }
 
 /** Advance to the next non-retired player and increment the turn counter. */
@@ -136,6 +151,10 @@ export function registerGameHandlers(io, socket) {
       }
     }
 
+    // Check end-game conditions now that the board has changed.
+    // (Only meaningful when we've just entered BUY_STOCKS; harmless to run otherwise.)
+    if (gs.turnPhase === 'BUY_STOCKS') checkAndFlagEndGame(gs);
+
     broadcastGameState(io, room);
     console.log(`${activePlayer.name} placed ${tileId} (${placementType}) in room ${roomCode}`);
   });
@@ -187,6 +206,8 @@ export function registerGameHandlers(io, socket) {
     }
 
     gs.turnPhase = 'BUY_STOCKS';
+    checkAndFlagEndGame(gs);
+
     broadcastGameState(io, room);
     console.log(`${activePlayer.name} founded ${chainName} (size ${chainSize}) in room ${roomCode}`);
   });
@@ -260,6 +281,68 @@ export function registerGameHandlers(io, socket) {
 
     broadcastGameState(io, room);
     console.log(`Turn ended in room ${roomCode}. Now: ${nextPlayer.name}'s turn.`);
+  });
+
+  /**
+   * game:retire
+   * Active player announces retirement instead of placing a tile.
+   *
+   * Rules:
+   *   - Only valid during the PLACE_TILE phase on the player's own turn.
+   *   - The player's tile hand is permanently removed from the draw pile (those
+   *     positions are retired and can never be placed).
+   *   - The player is marked isRetired = true and skipped in all future turns.
+   *   - They keep their cash and stocks (final payouts happen at end game).
+   *   - If all non-retired players are now retired, the game ends immediately.
+   */
+  socket.on('game:retire', ({ playerId, roomCode }) => {
+    const room = getRoom(roomCode);
+    if (!room?.gameState) return;
+
+    const gs           = room.gameState;
+    const activePlayer = gs.players[gs.activePlayerIndex];
+
+    // --- Validation ---
+    if (activePlayer.id !== playerId) {
+      socket.emit('error', { message: "It's not your turn." }); return;
+    }
+    if (gs.turnPhase !== 'PLACE_TILE') {
+      socket.emit('error', { message: 'You can only retire at the start of your turn.' }); return;
+    }
+    if (activePlayer.isRetired) {
+      socket.emit('error', { message: 'You are already retired.' }); return;
+    }
+
+    // --- Retire the player ---
+    // Permanently remove their held tiles so they can never be drawn again.
+    const hand = room.playerTiles[playerId] ?? [];
+    gs.retiredTilePositions.push(...hand);
+    room.playerTiles[playerId] = []; // hand is now empty
+
+    activePlayer.isRetired = true;
+    addLog(gs, `${activePlayer.name} has retired. Their ${hand.length} tile(s) are permanently removed from play.`);
+
+    // --- Check if all remaining players are retired (game must end) ---
+    const activePlayers = gs.players.filter(p => !p.isRetired);
+    if (activePlayers.length === 0) {
+      gs.isGameOver      = true;
+      gs.endGameAvailable = true;
+      gs.endGameReason   = 'All players have retired.';
+      addLog(gs, 'All players have retired — the game is over!');
+      broadcastGameState(io, room);
+      console.log(`All players retired in room ${roomCode}. Game over.`);
+      return;
+    }
+
+    // --- Advance to the next active player ---
+    advanceToNextPlayer(gs);
+    gs.turnPhase = 'PLACE_TILE';
+
+    const nextPlayer = gs.players[gs.activePlayerIndex];
+    addLog(gs, `It is now ${nextPlayer.name}'s turn.`);
+
+    broadcastGameState(io, room);
+    console.log(`${activePlayer.name} retired in room ${roomCode}. Next: ${nextPlayer.name}.`);
   });
 
   /**
@@ -337,8 +420,108 @@ export function registerGameHandlers(io, socket) {
         addLog(gs, `Resolving ${defunctChain} — waiting for player decisions.`);
       }
       gs.turnPhase = phase;
+
+      // A completed merger can push the survivor to 41+ tiles or make all chains safe.
+      if (phase === 'BUY_STOCKS') checkAndFlagEndGame(gs);
     }
 
     broadcastGameState(io, room);
+  });
+
+  /**
+   * game:declareEndGame
+   * Active player officially ends the game (only valid when endGameAvailable is true).
+   *
+   * This can only be sent during the BUY_STOCKS phase — the player may buy stock
+   * normally first and then declare, or declare immediately (with purchases = []).
+   * Purchases are handled by the existing game:endTurn event; this event is sent
+   * INSTEAD of game:endTurn when the player wants to trigger end-game.
+   *
+   * Flow:
+   *   1. Validate conditions (endGameAvailable, active player, BUY_STOCKS phase).
+   *   2. Optionally apply any final stock purchases (same logic as game:endTurn).
+   *   3. Execute final payouts (bonuses → liquidation → determine winner).
+   *   4. Set isGameOver = true, turnPhase = 'GAME_OVER', winner = winnerId.
+   *   5. Broadcast final state to all clients.
+   */
+  socket.on('game:declareEndGame', ({ playerId, roomCode, purchases = [] }) => {
+    const room = getRoom(roomCode);
+    if (!room?.gameState) return;
+
+    const gs           = room.gameState;
+    const activePlayer = gs.players[gs.activePlayerIndex];
+
+    // --- Validation ---
+    if (!gs.endGameAvailable) {
+      socket.emit('error', { message: 'End-game conditions have not been met yet.' }); return;
+    }
+    if (gs.isGameOver) {
+      socket.emit('error', { message: 'The game is already over.' }); return;
+    }
+    if (activePlayer.id !== playerId) {
+      socket.emit('error', { message: 'Only the active player can declare the game over.' }); return;
+    }
+    if (gs.turnPhase !== 'BUY_STOCKS') {
+      socket.emit('error', { message: 'You can only declare the game over during the buy phase.' }); return;
+    }
+
+    // --- Optional final stock purchases (identical logic to game:endTurn) ---
+    if (purchases.length > 0) {
+      const validation = validatePurchase(gs, playerId, purchases);
+      if (!validation.valid) {
+        socket.emit('error', { message: validation.error }); return;
+      }
+      applyPurchase(gs, playerId, purchases);
+      const summary = purchases.map(p => `${p.quantity}× ${p.chainName}`).join(', ');
+      addLog(gs, `${activePlayer.name} bought: ${summary} ($${validation.totalCost.toLocaleString()}) before declaring end game.`);
+    }
+
+    // --- Declare game over and run final payouts ---
+    gs.isGameOver = true;
+    gs.turnPhase  = 'GAME_OVER';
+    addLog(gs, `${activePlayer.name} has declared the game over! (${gs.endGameReason})`);
+
+    const { logs, winnerId } = executeEndGamePayouts(gs);
+    for (const msg of logs) addLog(gs, msg);
+
+    gs.winner = winnerId;
+    const winner = gs.players.find(p => p.id === winnerId);
+
+    broadcastGameState(io, room);
+    console.log(`Game over in room ${roomCode}. Winner: ${winner.name} ($${winner.cash.toLocaleString()})`);
+  });
+
+  /**
+   * game:playAgain
+   * Any player in the room can trigger a rematch once the game is over.
+   *
+   * Reuses the same room code and player list; everything else is reset to
+   * a fresh initial state (new shuffle, new tile hands, cleared board, etc.).
+   */
+  socket.on('game:playAgain', ({ playerId, roomCode }) => {
+    const room = getRoom(roomCode);
+    if (!room?.gameState) return;
+
+    const gs = room.gameState;
+
+    // --- Validation ---
+    if (!gs.isGameOver) {
+      socket.emit('error', { message: 'The game is not over yet.' }); return;
+    }
+    const requestingPlayer = gs.players.find(p => p.id === playerId);
+    if (!requestingPlayer) {
+      socket.emit('error', { message: 'You are not in this game.' }); return;
+    }
+
+    // --- Reset ---
+    const { newGameState, newPlayerTiles } = resetGameState(gs);
+    room.gameState   = newGameState;
+    room.playerTiles = newPlayerTiles;
+
+    addLog(room.gameState, `${requestingPlayer.name} started a new game!`);
+
+    // Broadcast fresh public state + each player's new private tile hand
+    broadcastGameState(io, room);
+    console.log(`Room ${roomCode} restarted by ${requestingPlayer.name}.`);
   });
 }

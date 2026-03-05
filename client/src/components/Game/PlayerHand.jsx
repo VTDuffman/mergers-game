@@ -28,8 +28,10 @@ export default function PlayerHand() {
     : 'Your tiles:';
 
   return (
-    <div className="bg-slate-800/90 border-t border-slate-700 px-4 py-3 flex-shrink-0">
-      <div className="flex items-center gap-2 flex-wrap">
+    <div className="sticky bottom-0 z-10 bg-slate-900/95 backdrop-blur-sm
+                    lg:static lg:bg-slate-800/90 lg:backdrop-blur-none
+                    border-t border-slate-700 px-4 py-3 flex-shrink-0">
+      <div className="flex items-center gap-2 overflow-x-auto lg:flex-wrap">
 
         <span className="text-slate-400 text-xs font-medium uppercase tracking-wider">
           {label}

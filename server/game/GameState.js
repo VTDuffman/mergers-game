@@ -94,9 +94,69 @@ export function createInitialGameState(players) {
 
     // ---- End state ----
     winner: null, // playerId of the winner once game ends
+
+    // ---- End-game availability ----
+    // Set to true when any end-game condition is first detected after a tile placement.
+    // The active player may then choose to declare the game over (or keep playing).
+    endGameAvailable: false,
+    endGameReason: null,   // human-readable string describing why the game can end
+    isGameOver: false,     // set to true when a player officially declares the game over
   };
 
   return { gameState, playerTiles };
+}
+
+/**
+ * Reset an in-progress or finished game to a fresh state, keeping the same players.
+ *
+ * Preserves each player's `id` and `name`. Everything else (cash, stocks, isRetired,
+ * board, chains, draw pile, log) is regenerated from scratch exactly like a new game.
+ *
+ * @param {object} oldState — the current gameState (used only for the player list)
+ * @returns {{ newGameState, newPlayerTiles }}
+ */
+export function resetGameState(oldState) {
+  // Strip each player back to bare identity; createInitialGameState fills in the rest
+  const players = oldState.players.map(p => ({ id: p.id, name: p.name }));
+  const { gameState: newGameState, playerTiles: newPlayerTiles } = createInitialGameState(players);
+  return { newGameState, newPlayerTiles };
+}
+
+/**
+ * Check whether the current board state meets any end-game condition.
+ *
+ * Conditions (per the rules):
+ *   1. Any active chain has grown to 41 or more tiles.
+ *   2. All active chains are "safe" (≥ 11 tiles) AND at least one chain is active.
+ *
+ * Returns { canEnd: false } if no condition is met.
+ * Returns { canEnd: true, reason: string } if the active player may declare game over.
+ */
+export function checkEndGameConditions(gs) {
+  const activeChains = Object.entries(gs.chains).filter(([, chain]) => chain.isActive);
+
+  // No chains on the board yet — game cannot end.
+  if (activeChains.length === 0) return { canEnd: false };
+
+  // Condition 1: a chain has reached 41+ tiles
+  const giant = activeChains.find(([, chain]) => chain.size >= 41);
+  if (giant) {
+    return {
+      canEnd: true,
+      reason: `${giant[0]} has reached ${giant[1].size} tiles (41+ triggers end game).`,
+    };
+  }
+
+  // Condition 2: every active chain is safe (≥ 11 tiles)
+  const allSafe = activeChains.every(([, chain]) => chain.isSafe);
+  if (allSafe) {
+    return {
+      canEnd: true,
+      reason: `All ${activeChains.length} active chain(s) are safe (11+ tiles each).`,
+    };
+  }
+
+  return { canEnd: false };
 }
 
 /**

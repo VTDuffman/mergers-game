@@ -1,0 +1,16 @@
+# Dependencies and Builds
+node_modules/
+client/dist/
+package-lock.json
+
+# Public Assets (unless actively modifying)
+client/public/
+*.ico
+*.png
+*.jpg
+*.svg
+
+# Tailwind/Vite Configs (These are done, don't let it read them)
+client/vite.config.js
+client/tailwind.config.js
+package.json
