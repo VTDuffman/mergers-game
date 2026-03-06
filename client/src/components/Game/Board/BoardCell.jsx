@@ -77,7 +77,7 @@ export default function BoardCell({
         w-full aspect-square rounded-sm text-[clamp(0.4rem,1.2vw,0.7rem)] font-mono font-bold
         flex items-center justify-center select-none transition-all
         ${bgClass} ${textClass} ${borderClass}
-        ${clickable ? 'cursor-pointer hover:brightness-125 hover:scale-105' : 'cursor-default'}
+        ${clickable ? 'cursor-pointer touch-manipulation sm:hover:brightness-125 sm:hover:scale-105' : 'cursor-default'}
       `}
     >
       {cellState !== 'empty' || isInHand ? label : ''}

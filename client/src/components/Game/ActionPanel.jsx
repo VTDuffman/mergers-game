@@ -34,8 +34,8 @@ export default function ActionPanel() {
       onClick={handleUndo}
       className="w-full px-3 py-2 rounded-lg font-semibold text-sm border-2 flex-shrink-0
                  bg-orange-900/60 border-orange-600 text-orange-300
-                 hover:bg-orange-800 hover:text-orange-100 active:scale-95
-                 transition-all cursor-pointer"
+                 sm:hover:bg-orange-800 sm:hover:text-orange-100 active:scale-95
+                 touch-manipulation transition-all cursor-pointer"
       title="Take back your tile placement and replay your turn"
     >
       ↩ Undo Turn

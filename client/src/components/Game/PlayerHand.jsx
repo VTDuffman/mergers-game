@@ -54,7 +54,7 @@ export default function PlayerHand() {
             <button
               onClick={handleDeclareEndGame}
               className="px-3 py-1.5 rounded-lg font-bold text-sm bg-emerald-600 border-2 border-emerald-400
-                         text-white hover:bg-emerald-500 active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                         text-white sm:hover:bg-emerald-500 active:scale-95 transition-all touch-manipulation cursor-pointer whitespace-nowrap"
             >
               Declare End Game
             </button>
@@ -86,7 +86,7 @@ export default function PlayerHand() {
               className={`
                 px-3 py-2 rounded-lg font-mono font-bold text-sm border-2 transition-all
                 ${canPlace
-                  ? 'bg-indigo-600 border-indigo-400 text-white hover:bg-indigo-500 cursor-pointer active:scale-95'
+                  ? 'bg-indigo-600 border-indigo-400 text-white sm:hover:bg-indigo-500 cursor-pointer active:scale-95 touch-manipulation'
                   : illegal
                     ? 'bg-slate-800 border-slate-700 text-slate-600 cursor-not-allowed opacity-40'
                     : 'bg-slate-700 border-slate-600 text-slate-300 cursor-default'
@@ -104,7 +104,7 @@ export default function PlayerHand() {
             onClick={handleRetire}
             className="ml-auto px-3 py-2 rounded-lg font-bold text-sm border-2
                        bg-red-900/60 border-red-600 text-red-300
-                       hover:bg-red-800 hover:text-red-100 active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                       sm:hover:bg-red-800 sm:hover:text-red-100 active:scale-95 transition-all touch-manipulation cursor-pointer whitespace-nowrap"
             title="Retire from the game — you keep your stocks and cash, but your tiles are removed from play"
           >
             Retire

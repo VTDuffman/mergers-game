@@ -14,6 +14,18 @@ export default function App() {
     // Open the WebSocket connection when the app first loads
     socket.connect();
 
+    // ---- Reconnection handling ----
+    // Socket.io automatically reconnects after a network drop (e.g. mobile sleep).
+    // When it does, the new socket ID is unknown to the server, so we re-emit
+    // lobby:join with our stored identity. The server finds the existing player,
+    // puts the new socket back into the room, and re-syncs the game state.
+    socket.on('connect', () => {
+      const { roomCode, myPlayerId, myName } = useStore.getState();
+      if (roomCode) {
+        socket.emit('lobby:join', { playerId: myPlayerId, playerName: myName, roomCode });
+      }
+    });
+
     // ---- Lobby events ----
 
     socket.on('lobby:created', ({ code }) => onRoomCreated(code));
@@ -38,6 +50,7 @@ export default function App() {
     socket.on('error', ({ message }) => setErrorMessage(message));
 
     return () => {
+      socket.off('connect');
       socket.off('lobby:created');
       socket.off('lobby:update');
       socket.off('lobby:joined');
