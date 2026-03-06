@@ -25,8 +25,8 @@ export default function GameLayout() {
   }
 
   return (
-    // On mobile: allow full-page scroll so nothing gets crushed.
-    // On xl desktop: lock to viewport height and use internal scrolling per column.
+    // Mobile:  full-page natural scroll, no height lock.
+    // Desktop: locked to viewport height, internal scrolling per column.
     <div className="flex flex-col min-h-screen xl:h-screen bg-slate-900
                     overflow-y-auto xl:overflow-hidden">
 
@@ -34,50 +34,60 @@ export default function GameLayout() {
       <TurnBanner />
 
       {/* ── Main content area ──
-          Mobile:  single column, flex-col. Items stack in DOM order, but we use
-                   Tailwind `order-*` utilities to force Center → Left → Right.
-          Desktop: three-column row that fills the remaining viewport height. */}
+          Mobile:  single flex-col. The sidebar wrappers use `display: contents`
+                   so their children participate directly in this flex container,
+                   allowing arbitrary cross-sidebar ordering via `order-*` classes.
+          Desktop: three-column flex-row. The `xl:` overrides restore the sidebar
+                   wrappers to normal block/flex containers with fixed widths. */}
       <div className="flex flex-col xl:flex-row xl:flex-1 xl:overflow-hidden p-1 gap-1">
 
         {/* ── LEFT SIDEBAR: Player list ──
-            Mobile:  order-2 (rendered below the board), rigid h-80, scrolls internally.
-            Desktop: order-1, fixed 288px wide, fills column height, scrolls internally. */}
-        <div className="order-2 xl:order-1
-                        flex-shrink-0 w-full xl:w-72
-                        h-80 xl:h-full
-                        overflow-y-auto">
-          <PlayerList />
+            Mobile:  `contents` — wrapper is invisible to flex layout; its child
+                     (the PlayerList div) participates directly in the outer column
+                     at order-3 (third from top).
+            Desktop: `xl:block` restores it as a normal 288px-wide, full-height,
+                     internally-scrolling column at flex order-1. */}
+        <div className="contents
+                        xl:block xl:order-1 xl:flex-shrink-0 xl:w-72 xl:h-full xl:overflow-y-auto">
+          <div className="order-3">
+            <PlayerList />
+          </div>
         </div>
 
-        {/* ── CENTER COLUMN: Board + Hand + Actions ──
-            This is the hero element. It renders FIRST on every screen size.
-            Mobile:  order-1 (top of page), natural height, no overflow clipping.
-            Desktop: order-2, flex-1 (claims all remaining width), min-h-0 so
-                     the flex child can shrink without overflow. */}
+        {/* ── CENTER COLUMN: Board + Stock buying + Actions + Hand ──
+            Always the hero. On mobile it is order-1 (top of page).
+            On desktop it is order-2, claims all remaining width (flex-1). */}
         <div className="order-1 xl:order-2
-                        xl:flex-1 min-w-0 min-h-0
+                        xl:flex-1 min-w-0 xl:min-h-0
                         flex flex-col gap-1">
           <GameBoard />
-          <PlayerHand />
+          <StockPanel />
           <ActionPanel />
+          <PlayerHand />
         </div>
 
-        {/* ── RIGHT SIDEBAR: Chain info + Stock buying + Game log ──
-            Mobile:  order-3 (rendered below the board), rigid h-80, scrolls internally.
-            Desktop: order-3, fixed 320px wide, fills column height. */}
-        <div className="order-3
-                        w-full xl:w-80 xl:shrink-0
-                        h-80 xl:h-full
-                        flex flex-col gap-2
-                        overflow-y-auto xl:overflow-hidden">
-          <ChainTable />
-          <StockPanel />
+        {/* ── RIGHT SIDEBAR: Hotel chains + Game log ──
+            Mobile:  `contents` — wrapper is invisible to flex layout; children
+                     participate directly in the outer column at their own order values.
+            Desktop: `xl:flex xl:flex-col` restores it as a normal 320px-wide,
+                     full-height, flex column at flex order-3. */}
+        <div className="contents
+                        xl:flex xl:flex-col xl:order-3 xl:w-80 xl:shrink-0 xl:h-full xl:gap-2 xl:overflow-hidden">
 
-          {/* Game log: fixed height on mobile, fills leftover space on desktop */}
-          <div className="h-32 xl:flex-1 xl:h-auto min-h-0
-                          bg-slate-800 rounded-lg p-2 overflow-hidden">
+          {/* ChainTable: order-2 on mobile (immediately below the board) */}
+          <div className="order-2">
+            <ChainTable />
+          </div>
+
+          {/* GameLog: order-4 on mobile (bottom of page).
+              Mobile:  max-h-64 + overflow-y-auto so it never grows infinitely.
+              Desktop: flex-1 + min-h-0 so it fills whatever space ChainTable leaves. */}
+          <div className="order-4 max-h-64 overflow-y-auto
+                          xl:max-h-none xl:flex-1 xl:min-h-0 xl:overflow-y-auto
+                          bg-slate-800 rounded-lg p-2">
             <GameLog />
           </div>
+
         </div>
 
       </div>
