@@ -4,12 +4,11 @@ import useStore from '../../store.js';
 /**
  * ActionPanel
  *
- * Renders contextual action buttons for the active player.
- * Currently shows only the Undo button, which lets a player take back
- * their tile placement as long as the turn hasn't been locked yet
- * (i.e. they haven't confirmed a merger).
+ * Renders the Undo Turn button when available. This component is placed
+ * inside the right sidebar (GameLayout), directly above StockPanel, so
+ * the Undo and End Turn buttons always appear as a cohesive pair.
  *
- * This component renders nothing for non-active players.
+ * Renders nothing when undo is not available or it is not the player's turn.
  */
 export default function ActionPanel() {
   const gameState  = useStore(s => s.gameState);
@@ -31,19 +30,15 @@ export default function ActionPanel() {
   }
 
   return (
-    <div className="sticky bottom-0 z-10 bg-slate-900/95 backdrop-blur-sm
-                    lg:static lg:bg-transparent lg:backdrop-blur-none
-                    px-4 py-1.5 flex-shrink-0">
-      <button
-        onClick={handleUndo}
-        className="w-full px-3 py-2 rounded-lg font-semibold text-sm border-2
-                   bg-orange-900/60 border-orange-600 text-orange-300
-                   hover:bg-orange-800 hover:text-orange-100 active:scale-95
-                   transition-all cursor-pointer"
-        title="Take back your tile placement and replay your turn"
-      >
-        Undo Turn
-      </button>
-    </div>
+    <button
+      onClick={handleUndo}
+      className="w-full px-3 py-2 rounded-lg font-semibold text-sm border-2 flex-shrink-0
+                 bg-orange-900/60 border-orange-600 text-orange-300
+                 hover:bg-orange-800 hover:text-orange-100 active:scale-95
+                 transition-all cursor-pointer"
+      title="Take back your tile placement and replay your turn"
+    >
+      ↩ Undo Turn
+    </button>
   );
 }

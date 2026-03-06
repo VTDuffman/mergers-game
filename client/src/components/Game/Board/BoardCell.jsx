@@ -74,7 +74,7 @@ export default function BoardCell({
       disabled={!clickable}
       title={tileId}
       className={`
-        w-9 h-9 mr-px rounded-sm text-[9px] font-mono font-bold
+        w-full aspect-square rounded-sm text-[clamp(0.4rem,1.2vw,0.7rem)] font-mono font-bold
         flex items-center justify-center select-none transition-all
         ${bgClass} ${textClass} ${borderClass}
         ${clickable ? 'cursor-pointer hover:brightness-125 hover:scale-105' : 'cursor-default'}

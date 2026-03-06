@@ -21,7 +21,6 @@ export default function GameBoard() {
   const myTileSet   = new Set(myTiles);
 
   // A tile is legal if the cell is currently empty.
-  // Phase 3 will add chain-founding checks; Phase 4 will add merger safety checks.
   // (The server performs the authoritative check — this is just for UI highlighting.)
   const legalTileSet = new Set(
     myTiles.filter(t => gameState.board[t] === 'empty')
@@ -36,27 +35,47 @@ export default function GameBoard() {
   }
 
   return (
-    <div className="w-full overflow-x-auto overflow-y-hidden">
-    <div className="inline-block p-2 min-w-[700px]">
-      {/* Column headers: A B C D ... L */}
-      <div className="flex ml-7 mb-1">
+    // Outer wrapper: fills the center column and caps width on very wide desktops.
+    // overflow-x-auto lets it scroll horizontally only on screens narrower than ~320px.
+    <div className="w-full max-w-4xl mx-auto p-2 overflow-x-auto">
+
+      {/*
+        Single flat CSS grid with 13 columns: 1 narrow label column + 12 equal cell columns.
+        All children (corner spacer, column headers, row labels, cells) are direct grid items,
+        so CSS auto-placement keeps everything perfectly aligned without any fixed pixel widths.
+        gap-0.5 / sm:gap-1 keeps spacing proportional as the board scales.
+      */}
+      <div className="grid grid-cols-[1.5rem_repeat(12,1fr)] gap-0.5 sm:gap-1">
+
+        {/* Top-left corner spacer (aligns with the row-label column) */}
+        <div />
+
+        {/* Column headers: A B C D ... L */}
         {COLUMNS.map(col => (
-          <div key={col} className="w-9 mr-px text-center text-[10px] text-slate-500 font-mono">
+          <div
+            key={`h-${col}`}
+            className="text-center text-[clamp(0.4rem,1.2vw,0.65rem)] text-slate-500 font-mono pb-0.5"
+          >
             {col}
           </div>
         ))}
-      </div>
 
-      {/* Board rows */}
-      {ROWS.map(row => (
-        <div key={row} className="flex items-center mb-px">
-          {/* Row header: 1 2 3 ... 9 */}
-          <div className="w-7 text-right pr-1.5 text-[10px] text-slate-500 font-mono flex-shrink-0">
+        {/*
+          All 9 rows flattened into the grid.
+          Each row contributes 1 label div + 12 BoardCell divs = 13 items,
+          which fills exactly one row of the 13-column grid.
+        */}
+        {ROWS.flatMap(row => [
+          // Row label (e.g. "1", "2" … "9")
+          <div
+            key={`label-${row}`}
+            className="text-[clamp(0.4rem,1.2vw,0.65rem)] text-slate-500 font-mono flex items-center justify-end pr-0.5"
+          >
             {row}
-          </div>
+          </div>,
 
-          {/* 12 cells for this row */}
-          {COLUMNS.map(col => {
+          // 12 cells for this row
+          ...COLUMNS.map(col => {
             const tileId = `${col}${row}`;
             return (
               <BoardCell
@@ -70,10 +89,10 @@ export default function GameBoard() {
                 onClick={() => handleCellClick(tileId)}
               />
             );
-          })}
-        </div>
-      ))}
-    </div>
+          }),
+        ])}
+
+      </div>
     </div>
   );
 }

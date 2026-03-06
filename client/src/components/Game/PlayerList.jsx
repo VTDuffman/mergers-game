@@ -35,17 +35,6 @@ export default function PlayerList() {
         </p>
       </div>
 
-      {/* Column headers */}
-      <div className="px-3 py-1 border-b border-slate-700/50 flex-shrink-0
-                      grid grid-cols-[auto_1fr_auto_auto_auto] gap-x-2
-                      text-[9px] uppercase tracking-wider text-slate-500">
-        <span />{/* rank */}
-        <span>Player</span>
-        <span className="text-right">Cash</span>
-        <span className="text-right">Stocks</span>
-        <span className="text-right">Net</span>
-      </div>
-
       <ul className="overflow-y-auto flex-1">
         {sorted.map((player, rank) => {
           const isActive   = player.id === activePlayer?.id;
@@ -57,32 +46,39 @@ export default function PlayerList() {
             <li
               key={player.id}
               className={`
-                px-3 py-2 border-b border-slate-700/50 last:border-0
+                px-3 py-2.5 border-b border-slate-700/50 last:border-0
                 border-l-2 transition-colors
                 ${isActive ? 'border-l-indigo-500 bg-indigo-900/20' : 'border-l-transparent'}
               `}
             >
               {/* Name row */}
-              <div className="flex items-center gap-1.5 mb-1">
+              <div className="flex items-center gap-1.5 mb-2">
                 <span className="text-[10px] text-slate-500 font-mono w-4 flex-shrink-0 text-right">
                   #{rank + 1}
                 </span>
-                <span className={`text-sm font-medium truncate flex-1
+                <span className={`text-sm font-semibold truncate flex-1
                   ${player.isRetired ? 'line-through text-slate-500' : 'text-white'}`}>
                   {player.name}
                 </span>
-                {isMe       && <span className="text-[9px] text-slate-500 flex-shrink-0">(you)</span>}
+                {isMe        && <span className="text-[9px] text-slate-500 flex-shrink-0">(you)</span>}
                 {isActive && !isMe && <span className="text-[9px] text-indigo-400 flex-shrink-0">▶</span>}
                 {player.isRetired && <span className="text-[9px] text-slate-600 flex-shrink-0">retired</span>}
               </div>
 
-              {/* Cash | Stock Value | Net Worth — aligned to header columns */}
-              <div className="grid grid-cols-[auto_1fr_auto_auto_auto] gap-x-2 text-[10px] tabular-nums">
-                <span />{/* rank spacer */}
-                <span />{/* name spacer */}
-                <span className="text-right text-slate-400">{formatDollars(player.cash)}</span>
-                <span className="text-right text-slate-400">{formatDollars(stockValue)}</span>
-                <span className="text-right text-slate-200 font-bold">{formatDollars(netWorth)}</span>
+              {/* Stats: vertical label + value pairs, indented to align under the name */}
+              <div className="ml-5 flex flex-col gap-0.5">
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] text-slate-500 uppercase tracking-wide">Cash</span>
+                  <span className="text-[11px] tabular-nums text-slate-300">{formatDollars(player.cash)}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] text-slate-500 uppercase tracking-wide">Stocks</span>
+                  <span className="text-[11px] tabular-nums text-slate-300">{formatDollars(stockValue)}</span>
+                </div>
+                <div className="flex justify-between items-center pt-0.5 mt-0.5 border-t border-slate-700/60">
+                  <span className="text-[10px] text-slate-400 uppercase tracking-wide font-semibold">Net</span>
+                  <span className="text-[11px] tabular-nums text-slate-100 font-bold">{formatDollars(netWorth)}</span>
+                </div>
               </div>
             </li>
           );
