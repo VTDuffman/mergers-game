@@ -5,11 +5,10 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      // During development, forward all Socket.io traffic to the backend.
+      // Forward all /api requests to the Express server during development.
       // In production, client and server are on the same host so no proxy is needed.
-      '/socket.io': {
+      '/api': {
         target: 'http://localhost:3001',
-        ws: true,       // enable WebSocket proxying
         changeOrigin: true,
       },
     },

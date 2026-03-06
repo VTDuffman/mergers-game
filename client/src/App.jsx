@@ -1,71 +1,41 @@
-import { useEffect } from 'react';
-import socket from './socket.js';
-import useStore from './store.js';
-import HomePage   from './components/Lobby/HomePage.jsx';
-import WaitingRoom from './components/Lobby/WaitingRoom.jsx';
-import GameLayout  from './components/Game/GameLayout.jsx';
+import { useState } from 'react';
+import { useAuth } from './context/AuthContext.jsx';
+import LoginPage     from './pages/LoginPage.jsx';
+import DashboardPage from './pages/DashboardPage.jsx';
+import LobbyPage     from './pages/LobbyPage.jsx';
+import GamePage      from './pages/GamePage.jsx';
 
+/**
+ * Root component. Auth gating + simple state-based router.
+ *
+ * Routing state:
+ *  { page: 'dashboard' }             — home / games list
+ *  { page: 'lobby',   gameId }       — pre-game waiting room
+ *  { page: 'game',    gameId }       — active game board
+ */
 export default function App() {
-  const phase = useStore(s => s.phase);
-  const { onRoomCreated, onLobbyUpdate, onKicked, setErrorMessage,
-          onGameStateUpdate, onMyTilesUpdate } = useStore();
+  const { user, loading } = useAuth();
 
-  useEffect(() => {
-    // Open the WebSocket connection when the app first loads
-    socket.connect();
+  const [route, setRoute] = useState({ page: 'dashboard' });
 
-    // ---- Reconnection handling ----
-    // Socket.io automatically reconnects after a network drop (e.g. mobile sleep).
-    // When it does, the new socket ID is unknown to the server, so we re-emit
-    // lobby:join with our stored identity. The server finds the existing player,
-    // puts the new socket back into the room, and re-syncs the game state.
-    socket.on('connect', () => {
-      const { roomCode, myPlayerId, myName } = useStore.getState();
-      if (roomCode) {
-        socket.emit('lobby:join', { playerId: myPlayerId, playerName: myName, roomCode });
-      }
-    });
+  const navigate = {
+    toDashboard: () => setRoute({ page: 'dashboard' }),
+    toLobby:     (gameId) => setRoute({ page: 'lobby', gameId }),
+    toGame:      (gameId) => setRoute({ page: 'game',  gameId }),
+  };
 
-    // ---- Lobby events ----
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="text-slate-500 text-sm">Loading...</div>
+      </div>
+    );
+  }
 
-    socket.on('lobby:created', ({ code }) => onRoomCreated(code));
+  if (!user) return <LoginPage />;
 
-    // Player list changed (join / leave / kick / reconnect)
-    socket.on('lobby:update', (data) => onLobbyUpdate(data));
+  if (route.page === 'lobby') return <LobbyPage gameId={route.gameId} navigate={navigate} />;
+  if (route.page === 'game')  return <GamePage  gameId={route.gameId} navigate={navigate} />;
 
-    // Confirmed we joined — the lobby:update that follows will set the room state
-    socket.on('lobby:joined', () => {});
-
-    socket.on('lobby:kicked', ({ message }) => onKicked(message));
-
-    // ---- Game events (Phase 2+) ----
-
-    // Server broadcast the full public game state after every action
-    socket.on('game:stateUpdate', (gs) => onGameStateUpdate(gs));
-
-    // Server sent our private tile hand (only to us, not other players)
-    socket.on('game:tilesUpdate', (tiles) => onMyTilesUpdate(tiles));
-
-    // ---- Generic error ----
-    socket.on('error', ({ message }) => setErrorMessage(message));
-
-    return () => {
-      socket.off('connect');
-      socket.off('lobby:created');
-      socket.off('lobby:update');
-      socket.off('lobby:joined');
-      socket.off('lobby:kicked');
-      socket.off('game:stateUpdate');
-      socket.off('game:tilesUpdate');
-      socket.off('error');
-    };
-  }, []);
-
-  return (
-    <div className="min-h-screen bg-slate-900 text-white">
-      {phase === 'home'    && <HomePage />}
-      {phase === 'lobby'   && <WaitingRoom />}
-      {phase === 'playing' && <GameLayout />}
-    </div>
-  );
+  return <DashboardPage navigate={navigate} />;
 }

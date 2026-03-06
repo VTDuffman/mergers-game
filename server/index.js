@@ -4,6 +4,9 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import { registerLobbyHandlers } from './socketHandlers/lobbyHandlers.js';
 import { registerGameHandlers }  from './socketHandlers/gameHandlers.js';
+import authRouter   from './routes/auth.js';
+import gamesRouter  from './routes/games.js';
+import invitesRouter from './routes/invites.js';
 
 const PORT = process.env.PORT || 3001;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
@@ -11,6 +14,13 @@ const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
 const app = express();
 app.use(cors({ origin: CLIENT_URL }));
 app.use(express.json());
+
+// ---- REST API Routes ----
+// Must be registered BEFORE the production static-file wildcard below,
+// or the wildcard catch-all will intercept /api/* requests.
+app.use('/api/auth',    authRouter);
+app.use('/api/games',   gamesRouter);
+app.use('/api/invites', invitesRouter);
 
 // In production, serve the built React app from client/dist.
 // This way one server handles both the API and the UI.

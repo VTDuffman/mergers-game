@@ -2,7 +2,10 @@
   "name": "acquire-online",
   "version": "1.0.0",
   "private": true,
-  "workspaces": ["client", "server"],
+  "workspaces": [
+    "client",
+    "server"
+  ],
   "scripts": {
     "dev": "concurrently \"npm run dev --workspace=server\" \"npm run dev --workspace=client\"",
     "build": "npm run build --workspace=client",
@@ -10,5 +13,9 @@
   },
   "devDependencies": {
     "concurrently": "^8.2.0"
+  },
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "resend": "^6.9.3"
   }
 }
