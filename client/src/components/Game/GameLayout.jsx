@@ -29,25 +29,25 @@ export default function GameLayout() {
       <TurnBanner />
 
       {/* ── Main content ── */}
-      <div className="flex flex-col lg:flex-row flex-1 overflow-hidden p-2 gap-2">
+      <div className="flex flex-col xl:flex-row flex-1 overflow-hidden p-2 gap-2">
 
         {/* Left: player list — full-width row on mobile, fixed sidebar on desktop */}
-        <div className="flex-shrink-0 lg:w-40 overflow-x-auto lg:overflow-y-auto">
+        <div className="flex-shrink-0 xl:w-40 overflow-x-auto xl:overflow-y-auto">
           <PlayerList />
         </div>
 
-        {/* Center: scrollable game board */}
-        <div className="flex-1 overflow-auto flex items-start justify-center">
+        {/* Center: scrollable game board — flex-1 + min-w-0 so it never squishes siblings */}
+        <div className="flex-1 min-w-0 overflow-auto flex items-start justify-center">
           <GameBoard />
         </div>
 
-        {/* Right: chain info + stock buying + game log — stacks below board on mobile */}
-        <div className="flex-shrink-0 lg:w-52 flex flex-col gap-2 overflow-hidden
-                        lg:max-h-full">
+        {/* Right: chain info + stock buying + game log — fixed width so it never compresses */}
+        <div className="w-full xl:w-96 xl:shrink-0 flex flex-col gap-2 overflow-hidden
+                        xl:max-h-full">
           <ChainTable />
           <StockPanel />
           {/* Game log — takes up remaining vertical space on desktop, fixed height on mobile */}
-          <div className="h-32 lg:flex-1 lg:h-auto min-h-0 bg-slate-800 rounded-lg p-2 overflow-hidden">
+          <div className="h-32 xl:flex-1 xl:h-auto min-h-0 bg-slate-800 rounded-lg p-2 overflow-hidden">
             <GameLog />
           </div>
         </div>

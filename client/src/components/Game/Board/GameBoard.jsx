@@ -37,7 +37,7 @@ export default function GameBoard() {
 
   return (
     <div className="w-full overflow-x-auto overflow-y-hidden">
-    <div className="inline-block p-2 min-w-[600px] md:min-w-full">
+    <div className="inline-block p-2 min-w-[700px]">
       {/* Column headers: A B C D ... L */}
       <div className="flex ml-7 mb-1">
         {COLUMNS.map(col => (

@@ -9,9 +9,11 @@ export default function PlayerHand() {
 
   if (!gameState) return null;
 
-  const activePlayer = gameState.players[gameState.activePlayerIndex];
-  const isMyTurn     = activePlayer?.id === myPlayerId;
-  const isPlacePhase = gameState.turnPhase === 'PLACE_TILE';
+  const activePlayer    = gameState.players[gameState.activePlayerIndex];
+  const isMyTurn        = activePlayer?.id === myPlayerId;
+  const isPlacePhase    = gameState.turnPhase === 'PLACE_TILE';
+  const endGameAvailable = gameState.endGameAvailable ?? false;
+  const endGameReason    = gameState.endGameReason ?? '';
 
   // A tile is legal to place if its cell is empty (server performs the authoritative check)
   function isLegal(tileId) {
@@ -23,6 +25,14 @@ export default function PlayerHand() {
     socket.emit('game:placeTile', { playerId: myPlayerId, roomCode, tileId });
   }
 
+  function handleDeclareEndGame() {
+    socket.emit('game:declareEndGame', { playerId: myPlayerId, roomCode });
+  }
+
+  function handleRetire() {
+    socket.emit('game:retire', { playerId: myPlayerId, roomCode });
+  }
+
   const label = isMyTurn && isPlacePhase
     ? 'Click a tile to place it:'
     : 'Your tiles:';
@@ -31,6 +41,27 @@ export default function PlayerHand() {
     <div className="sticky bottom-0 z-10 bg-slate-900/95 backdrop-blur-sm
                     lg:static lg:bg-slate-800/90 lg:backdrop-blur-none
                     border-t border-slate-700 px-4 py-3 flex-shrink-0">
+
+      {/* ── End Game banner — visible to ALL players when end game is available ── */}
+      {endGameAvailable && (
+        <div className="flex items-center gap-3 mb-2 p-2 bg-emerald-900/50 border border-emerald-600 rounded-lg">
+          <span className="text-emerald-300 text-xs flex-1">
+            <span className="font-bold uppercase tracking-wide">End game available</span>
+            {endGameReason && <span className="ml-1 text-emerald-400">— {endGameReason}</span>}
+          </span>
+          {/* Only the active player can pull the trigger */}
+          {isMyTurn && (
+            <button
+              onClick={handleDeclareEndGame}
+              className="px-3 py-1.5 rounded-lg font-bold text-sm bg-emerald-600 border-2 border-emerald-400
+                         text-white hover:bg-emerald-500 active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+            >
+              Declare End Game
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="flex items-center gap-2 overflow-x-auto lg:flex-wrap">
 
         <span className="text-slate-400 text-xs font-medium uppercase tracking-wider">
@@ -66,6 +97,19 @@ export default function PlayerHand() {
             </button>
           );
         })}
+
+        {/* ── Retire button — only shown to the active player during PLACE_TILE ── */}
+        {isMyTurn && isPlacePhase && (
+          <button
+            onClick={handleRetire}
+            className="ml-auto px-3 py-2 rounded-lg font-bold text-sm border-2
+                       bg-red-900/60 border-red-600 text-red-300
+                       hover:bg-red-800 hover:text-red-100 active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+            title="Retire from the game — you keep your stocks and cash, but your tiles are removed from play"
+          >
+            Retire
+          </button>
+        )}
 
       </div>
     </div>
