@@ -10,11 +10,15 @@ import useStore from '../../store.js';
  */
 export default function GameLog() {
   const log = useStore(s => s.gameState?.log ?? []);
-  const bottomRef = useRef(null);
+  const logContainerRef = useRef(null);
 
   // Auto-scroll to the bottom whenever the log grows.
+  // We set scrollTop directly on the container instead of using scrollIntoView(),
+  // because scrollIntoView() can bubble up and scroll the entire browser window.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+    }
   }, [log.length]);
 
   return (
@@ -23,7 +27,7 @@ export default function GameLog() {
         Game Log
       </h2>
 
-      <div className="flex-1 overflow-y-auto space-y-0.5 pr-1">
+      <div ref={logContainerRef} className="flex-1 overflow-y-auto space-y-0.5 pr-1">
         {log.length === 0 ? (
           <p className="text-xs text-slate-600 italic">No events yet.</p>
         ) : (
@@ -44,8 +48,6 @@ export default function GameLog() {
             );
           })
         )}
-        {/* Invisible anchor — scrolled into view on new messages */}
-        <div ref={bottomRef} />
       </div>
     </div>
   );
