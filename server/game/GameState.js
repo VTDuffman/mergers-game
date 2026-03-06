@@ -101,6 +101,21 @@ export function createInitialGameState(players) {
     endGameAvailable: false,
     endGameReason: null,   // human-readable string describing why the game can end
     isGameOver: false,     // set to true when a player officially declares the game over
+
+    // ---- Undo / turn-lock flags ----
+    // hasActedThisTurn: true once the active player places a tile this turn.
+    //   Enables the Undo button until the turn is locked.
+    // isTurnLocked: true once a merger is officially confirmed (cannot be undone).
+    //   Stays false for simple/grow/found placements, so undo remains available
+    //   until the player ends their turn.
+    hasActedThisTurn: false,
+    isTurnLocked: false,
+
+    // ---- Pending merger (CONFIRM_MERGER phase) ----
+    // Populated when a tile triggers a merger but before the player confirms.
+    // Stores enough context to call initiateMerger once they click "Send Move".
+    // null at all other times.
+    pendingMerger: null,
   };
 
   return { gameState, playerTiles };

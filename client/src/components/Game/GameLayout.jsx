@@ -1,15 +1,17 @@
-import TurnBanner            from './TurnBanner.jsx';
-import GameBoard              from './Board/GameBoard.jsx';
-import PlayerHand             from './PlayerHand.jsx';
-import PlayerList             from './PlayerList.jsx';
-import ChainTable             from './ChainTable.jsx';
-import StockPanel             from './StockPanel.jsx';
-import GameLog                from './GameLog.jsx';
-import NameChainDialog        from './Dialogs/NameChainDialog.jsx';
-import SurvivorDialog         from './Dialogs/SurvivorDialog.jsx';
-import MergerDecisionDialog   from './Dialogs/MergerDecisionDialog.jsx';
-import ScoreScreen            from '../EndGame/ScoreScreen.jsx';
-import useStore               from '../../store.js';
+import TurnBanner              from './TurnBanner.jsx';
+import GameBoard               from './Board/GameBoard.jsx';
+import PlayerHand              from './PlayerHand.jsx';
+import PlayerList              from './PlayerList.jsx';
+import ChainTable              from './ChainTable.jsx';
+import StockPanel              from './StockPanel.jsx';
+import GameLog                 from './GameLog.jsx';
+import ActionPanel             from './ActionPanel.jsx';
+import NameChainDialog         from './Dialogs/NameChainDialog.jsx';
+import SurvivorDialog          from './Dialogs/SurvivorDialog.jsx';
+import MergerDecisionDialog    from './Dialogs/MergerDecisionDialog.jsx';
+import ConfirmMergerDialog     from './Dialogs/ConfirmMergerDialog.jsx';
+import ScoreScreen             from '../EndGame/ScoreScreen.jsx';
+import useStore                from '../../store.js';
 
 export default function GameLayout() {
   const gameState = useStore(s => s.gameState);
@@ -54,10 +56,14 @@ export default function GameLayout() {
 
       </div>
 
+      {/* ── Undo button — shown above the hand when an action can be reversed ── */}
+      <ActionPanel />
+
       {/* ── Bottom: tile hand (sticky on mobile, static on desktop) ── */}
       <PlayerHand />
 
       {/* ── Overlay dialogs (render on top of everything) ── */}
+      <ConfirmMergerDialog />    {/* turnPhase === 'CONFIRM_MERGER'    */}
       <NameChainDialog />        {/* turnPhase === 'NAME_CHAIN'        */}
       <SurvivorDialog />         {/* turnPhase === 'CHOOSE_SURVIVOR'   */}
       <MergerDecisionDialog />   {/* turnPhase === 'MERGER_DECISIONS'  */}

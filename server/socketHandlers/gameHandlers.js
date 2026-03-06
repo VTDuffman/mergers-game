@@ -13,6 +13,55 @@ import {
 // ---- Helpers ----
 
 /**
+ * Deep-clone any plain-JS object/array tree using JSON serialization.
+ * Safe for our game state because it contains only strings, numbers,
+ * booleans, plain objects, and arrays (no Sets, Maps, or functions).
+ */
+function deepClone(obj) {
+  return JSON.parse(JSON.stringify(obj));
+}
+
+/**
+ * Snapshot the current turn state onto the room object.
+ * Called at the START of each player's turn (PLACE_TILE), before they act.
+ * The snapshot is used to restore state if the player triggers an undo.
+ */
+function snapshotTurn(room) {
+  room.turnSnapshot = {
+    gameState:   deepClone(room.gameState),
+    playerTiles: deepClone(room.playerTiles),
+  };
+}
+
+/**
+ * Given the chains adjacent to a newly-placed merger tile, work out
+ * which chain would survive and which would be acquired — without
+ * actually mutating any game state.
+ *
+ * Returns a `pendingMerger` object that is stored on `gameState` during
+ * the CONFIRM_MERGER phase so the client can show a confirmation dialog.
+ *
+ * @param {object} gs       — current game state (read-only here)
+ * @param {string} tileId   — the tile that triggered the merger
+ * @param {string[]} adjChains — chain names adjacent to that tile
+ */
+function computePendingMerger(gs, tileId, adjChains) {
+  // Sort chains largest-first to identify the natural survivor
+  const sorted = [...adjChains].sort((a, b) => gs.chains[b].size - gs.chains[a].size);
+
+  // A tie exists when the top two chains share the same size
+  const isTie = sorted.length >= 2 && gs.chains[sorted[0]].size === gs.chains[sorted[1]].size;
+
+  return {
+    tileId,                                                      // needed for confirmMerger
+    adjChains,                                                   // needed for confirmMerger
+    survivorName: isTie ? null : sorted[0],                      // null if player must choose
+    defunctNames: isTie ? sorted : sorted.slice(1),              // chains being acquired
+    isTie,
+  };
+}
+
+/**
  * Broadcast the public game state to all players in the room,
  * then send each player their private tile hand individually.
  * Called after every state change.
@@ -99,10 +148,18 @@ export function registerGameHandlers(io, socket) {
       socket.emit('error', { message: 'That tile cannot be played right now.' }); return;
     }
 
+    // --- Take a snapshot of the clean turn state before the player acts ---
+    // This is the restore point for the undo feature.
+    // If a snapshot doesn't exist yet (first turn of the game), create it now.
+    if (!room.turnSnapshot) snapshotTurn(room);
+
     // --- Apply the move ---
     room.playerTiles[playerId] = hand.filter(t => t !== tileId);
     const placementType = classifyPlacement(gs, tileId);
     gs.board[tileId] = 'lone'; // always start as lone; chain logic may immediately reassign
+
+    // Flag that the active player has now acted — enables the Undo button
+    gs.hasActedThisTurn = true;
 
     addLog(gs, `${activePlayer.name} placed tile ${tileId}.`);
 
@@ -129,26 +186,17 @@ export function registerGameHandlers(io, socket) {
       gs.turnPhase = 'BUY_STOCKS';
 
     } else if (placementType === 'merge') {
+      // ── MERGER INTERCEPT ──────────────────────────────────────────────────
+      // Do NOT execute the merger yet. Instead, pause at CONFIRM_MERGER so
+      // the active player can review what will happen and either confirm or
+      // take back their tile (undo). The tile is already shown on the board.
       const adjChains = getAdjacentChains(gs.board, tileId);
       addLog(gs, `${activePlayer.name} placed ${tileId} — merger between ${adjChains.join(', ')}!`);
 
-      const { needsSurvivorChoice, candidateChains } = initiateMerger(
-        gs, tileId, adjChains, gs.activePlayerIndex
-      );
-
-      if (needsSurvivorChoice) {
-        gs.turnPhase = 'CHOOSE_SURVIVOR';
-        addLog(gs, `Tied at ${gs.chains[candidateChains[0]].size} tiles — ${activePlayer.name} must pick the survivor.`);
-      } else {
-        const survivor = gs.mergerContext.survivorChain;
-        addLog(gs, `${survivor} survives.`);
-        const { phase, bonusLogs, defunctChain } = advanceMerger(gs);
-        for (const msg of bonusLogs) addLog(gs, msg);
-        if (phase === 'MERGER_DECISIONS') {
-          addLog(gs, `Resolving ${defunctChain} — waiting for player decisions.`);
-        }
-        gs.turnPhase = phase;
-      }
+      // Store enough context for the confirmation dialog and the later commit.
+      gs.pendingMerger = computePendingMerger(gs, tileId, adjChains);
+      gs.turnPhase = 'CONFIRM_MERGER';
+      // Note: initiateMerger is NOT called here — it runs in game:confirmMerger.
     }
 
     // Check end-game conditions now that the board has changed.
@@ -274,10 +322,15 @@ export function registerGameHandlers(io, socket) {
 
     // --- Advance to next player ---
     advanceToNextPlayer(gs);
-    gs.turnPhase = 'PLACE_TILE';
+    gs.turnPhase        = 'PLACE_TILE';
+    gs.hasActedThisTurn = false;  // new player hasn't placed a tile yet
+    gs.isTurnLocked     = false;  // unlock for the new turn
 
     const nextPlayer = gs.players[gs.activePlayerIndex];
     addLog(gs, `It is now ${nextPlayer.name}'s turn.`);
+
+    // Snapshot the clean start-of-turn state so the next player can undo if needed
+    snapshotTurn(room);
 
     broadcastGameState(io, room);
     console.log(`Turn ended in room ${roomCode}. Now: ${nextPlayer.name}'s turn.`);
@@ -336,10 +389,15 @@ export function registerGameHandlers(io, socket) {
 
     // --- Advance to the next active player ---
     advanceToNextPlayer(gs);
-    gs.turnPhase = 'PLACE_TILE';
+    gs.turnPhase        = 'PLACE_TILE';
+    gs.hasActedThisTurn = false;
+    gs.isTurnLocked     = false;
 
     const nextPlayer = gs.players[gs.activePlayerIndex];
     addLog(gs, `It is now ${nextPlayer.name}'s turn.`);
+
+    // Snapshot the clean start-of-turn state for the next player
+    snapshotTurn(room);
 
     broadcastGameState(io, room);
     console.log(`${activePlayer.name} retired in room ${roomCode}. Next: ${nextPlayer.name}.`);
@@ -489,6 +547,104 @@ export function registerGameHandlers(io, socket) {
 
     broadcastGameState(io, room);
     console.log(`Game over in room ${roomCode}. Winner: ${winner.name} ($${winner.cash.toLocaleString()})`);
+  });
+
+  /**
+   * game:undoTurn
+   * Active player takes back their tile placement, restoring the board, their
+   * hand, and all game state to exactly how it was at the start of this turn.
+   *
+   * Valid only when:
+   *   - It is this player's turn
+   *   - They have already acted (hasActedThisTurn = true)
+   *   - The turn is not yet locked (isTurnLocked = false, i.e. no merger confirmed)
+   */
+  socket.on('game:undoTurn', ({ playerId, roomCode }) => {
+    const room = getRoom(roomCode);
+    if (!room?.gameState) return;
+
+    const gs           = room.gameState;
+    const activePlayer = gs.players[gs.activePlayerIndex];
+
+    if (activePlayer.id !== playerId) {
+      socket.emit('error', { message: "It's not your turn." }); return;
+    }
+    if (!gs.hasActedThisTurn) {
+      socket.emit('error', { message: 'You have not placed a tile yet — nothing to undo.' }); return;
+    }
+    if (gs.isTurnLocked) {
+      socket.emit('error', { message: 'This move has already been confirmed and cannot be undone.' }); return;
+    }
+    if (!room.turnSnapshot) {
+      socket.emit('error', { message: 'No snapshot available — cannot undo.' }); return;
+    }
+
+    // Restore state from snapshot. Deep-clone so the snapshot stays intact
+    // (in case the player undoes, acts again, and wants to undo once more).
+    room.gameState   = deepClone(room.turnSnapshot.gameState);
+    room.playerTiles = deepClone(room.turnSnapshot.playerTiles);
+
+    broadcastGameState(io, room);
+    console.log(`${activePlayer.name} undid their turn in room ${roomCode}`);
+  });
+
+  /**
+   * game:confirmMerger
+   * Active player confirms the merger they just triggered by placing a tile.
+   * This is the commit point — the turn becomes locked after this, so it
+   * cannot be undone.
+   *
+   * Flow:
+   *   1. Validate CONFIRM_MERGER phase and active player.
+   *   2. Lock the turn (isTurnLocked = true — no more undos).
+   *   3. Execute initiateMerger with the stored pendingMerger context.
+   *   4. Advance to CHOOSE_SURVIVOR or MERGER_DECISIONS as normal.
+   */
+  socket.on('game:confirmMerger', ({ playerId, roomCode }) => {
+    const room = getRoom(roomCode);
+    if (!room?.gameState) return;
+
+    const gs           = room.gameState;
+    const activePlayer = gs.players[gs.activePlayerIndex];
+
+    if (activePlayer.id !== playerId) {
+      socket.emit('error', { message: "It's not your turn." }); return;
+    }
+    if (gs.turnPhase !== 'CONFIRM_MERGER') {
+      socket.emit('error', { message: 'No merger to confirm right now.' }); return;
+    }
+
+    // Extract the stored context and clear it before mutating state
+    const { tileId, adjChains } = gs.pendingMerger;
+    gs.pendingMerger = null;
+
+    // Lock this turn — undo is no longer possible once the merger runs
+    gs.isTurnLocked = true;
+
+    // Now run the existing merger logic exactly as before
+    const { needsSurvivorChoice, candidateChains } = initiateMerger(
+      gs, tileId, adjChains, gs.activePlayerIndex
+    );
+
+    if (needsSurvivorChoice) {
+      gs.turnPhase = 'CHOOSE_SURVIVOR';
+      addLog(gs, `Tied at ${gs.chains[candidateChains[0]].size} tiles — ${activePlayer.name} must pick the survivor.`);
+    } else {
+      const survivor = gs.mergerContext.survivorChain;
+      addLog(gs, `${survivor} survives.`);
+      const { phase, bonusLogs, defunctChain } = advanceMerger(gs);
+      for (const msg of bonusLogs) addLog(gs, msg);
+      if (phase === 'MERGER_DECISIONS') {
+        addLog(gs, `Resolving ${defunctChain} — waiting for player decisions.`);
+      }
+      gs.turnPhase = phase;
+    }
+
+    // A completed merger can trigger end-game conditions
+    if (gs.turnPhase === 'BUY_STOCKS') checkAndFlagEndGame(gs);
+
+    broadcastGameState(io, room);
+    console.log(`${activePlayer.name} confirmed merger in room ${roomCode}`);
   });
 
   /**
