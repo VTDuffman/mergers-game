@@ -5,8 +5,7 @@
   "workspaces": ["client", "server"],
   "scripts": {
     "dev": "concurrently \"npm run dev --workspace=server\" \"npm run dev --workspace=client\"",
-    "install": "cd client && npm install && cd ../server && npm install",
-    "build": "cd client && npm run build",
+    "build": "npm run build --workspace=client",
     "start": "NODE_ENV=production node server/index.js"
   },
   "devDependencies": {
