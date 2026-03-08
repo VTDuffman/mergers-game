@@ -2,11 +2,19 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { supabase } from '../lib/supabase.js';
 import { sendInviteEmail, sendTurnNotificationEmail } from '../lib/email.js';
-import { createInitialGameState, getPublicGameState } from '../game/GameState.js';
-import { classifyPlacement, getAdjacentChains } from '../game/boardLogic.js';
+import { createInitialGameState, getPublicGameState, checkEndGameConditions } from '../game/GameState.js';
+import { classifyPlacement, getAdjacentChains, findUnplayableTiles } from '../game/boardLogic.js';
 import { foundChain, growChain } from '../game/chainLogic.js';
 import { validatePurchase, applyPurchase } from '../game/stockLogic.js';
 import { drawTiles } from '../game/tileLogic.js';
+import {
+  initiateMerger,
+  applySurvivorChoice,
+  advanceMerger,
+  validateMergerDecision,
+  applyMergerDecision,
+  executeEndGamePayouts,
+} from '../game/mergerLogic.js';
 
 const router = Router();
 
@@ -127,6 +135,35 @@ router.get('/:gameId', async (req, res) => {
     invites: invitesResult.data || [],
     players: playersResult.data || [],
   });
+});
+
+// ============================================================
+// DELETE /api/games/:gameId
+// Host deletes a game that hasn't started yet.
+// Security: caller must be the host; game must still be in LOBBY status.
+// Cascade deletes handle game_players, game_invites, etc.
+// ============================================================
+router.delete('/:gameId', async (req, res) => {
+  const { gameId } = req.params;
+
+  const { data: game } = await supabase
+    .from('games')
+    .select('host_id, status')
+    .eq('id', gameId)
+    .single();
+
+  if (!game) return res.status(404).json({ error: 'Game not found' });
+  if (game.host_id !== req.user.id) return res.status(403).json({ error: 'Only the host can delete this game' });
+  if (game.status !== 'LOBBY') return res.status(400).json({ error: 'Only games in the lobby can be deleted' });
+
+  const { error } = await supabase
+    .from('games')
+    .delete()
+    .eq('id', gameId);
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  res.json({ success: true });
 });
 
 // ============================================================
@@ -579,12 +616,70 @@ router.post('/:gameId/play-tile', async (req, res) => {
   // Classify (before mutating the board)
   const classification = classifyPlacement(state, tilePlaced);
   if (classification === 'illegal') return res.status(400).json({ error: 'That tile cannot be played here' });
-  if (classification === 'merge')   return res.status(400).json({ error: 'Mergers coming soon! This tile would trigger a merger.' });
 
-  // Capture adjacent chains before marking the cell as lone
+  // Capture adjacent chains before any board mutation — needed for grow and merge
   const adjacentChains = getAdjacentChains(state.board, tilePlaced);
 
-  // Place the tile (mark as lone)
+  // ---- Merger handling — fully resolved here, returns early ----
+  if (classification === 'merge') {
+    // Mark tile as 'lone' first — initiateMerger requires this
+    state.board[tilePlaced] = 'lone';
+    playerTiles[req.user.id] = hand.filter(t => t !== tilePlaced);
+
+    const { needsSurvivorChoice, candidateChains } = initiateMerger(
+      state, tilePlaced, adjacentChains, state.activePlayerIndex
+    );
+
+    if (needsSurvivorChoice) {
+      // Two or more chains are the same size — active player must choose which survives
+      state.turnPhase = 'CHOOSE_SURVIVOR';
+      state.log = [{
+        time: new Date().toISOString(),
+        message: `${activePlayer.name} placed ${tilePlaced} — tied merger! Must choose the surviving chain.`,
+      }, ...(state.log ?? [])].slice(0, 50);
+      const saved = await saveState(gameId, state, playerTiles);
+      if (saved.error) return res.status(500).json({ error: saved.error.message });
+      return res.json({
+        publicState: saved.publicState,
+        myTiles:     playerTiles[req.user.id] ?? [],
+        drawPileCount: saved.drawPile.length,
+        needsSurvivorChoice: true,
+        candidateChains,
+      });
+    }
+
+    // No tie — drive the merger state machine forward
+    const { phase, bonusLogs } = advanceMerger(state);
+    state.log = [
+      ...bonusLogs.map(msg => ({ time: new Date().toISOString(), message: msg })),
+      { time: new Date().toISOString(), message: `${activePlayer.name} placed ${tilePlaced} — merger triggered!` },
+      ...(state.log ?? []),
+    ].slice(0, 50);
+
+    if (phase === 'BUY_STOCKS') {
+      // No defunct stockholders needed decisions — jump straight to buying
+      state.turnPhase = 'BUY_STOCKS';
+      const { canEnd, reason } = checkEndGameConditions(state);
+      state.endGameAvailable = canEnd;
+      state.endGameReason    = reason ?? null;
+    } else {
+      // At least one player must decide what to do with defunct shares
+      state.turnPhase = 'MERGER_DECISIONS';
+      await supabase.from('games').update({ status: 'MERGER_PAUSE' }).eq('id', gameId);
+    }
+
+    const saved = await saveState(gameId, state, playerTiles);
+    if (saved.error) return res.status(500).json({ error: saved.error.message });
+    return res.json({
+      publicState:   saved.publicState,
+      myTiles:       playerTiles[req.user.id] ?? [],
+      drawPileCount: saved.drawPile.length,
+      classification,
+    });
+  }
+
+  // ---- Non-merger tile placement (simple / grow / found) ----
+  // Place the tile as a lone tile on the board
   state.board[tilePlaced] = 'lone';
   playerTiles[req.user.id] = hand.filter(t => t !== tilePlaced);
 
@@ -629,6 +724,175 @@ router.post('/:gameId/play-tile', async (req, res) => {
     drawPileCount: saved.drawPile.length,
     classification,
   });
+});
+
+// ============================================================
+// POST /api/games/:gameId/choose-survivor
+// Called when a merger tile connects chains of equal size (CHOOSE_SURVIVOR phase).
+// Active player picks which chain survives; game advances to MERGER_DECISIONS or BUY_STOCKS.
+//
+// Body: { survivorChain: string }
+// ============================================================
+router.post('/:gameId/choose-survivor', async (req, res) => {
+  const { gameId } = req.params;
+  const { survivorChain } = req.body;
+
+  if (!survivorChain) return res.status(400).json({ error: 'survivorChain is required' });
+
+  const loaded = await loadState(gameId);
+  if (!loaded) return res.status(500).json({ error: 'Could not load game state' });
+  const { state, playerTiles } = loaded;
+
+  if (!state.mergerContext)              return res.status(400).json({ error: 'No merger in progress' });
+  if (state.turnPhase !== 'CHOOSE_SURVIVOR') return res.status(400).json({ error: 'Not in survivor-choice phase' });
+
+  const activePlayer = state.players[state.activePlayerIndex];
+  if (activePlayer.id !== req.user.id) {
+    return res.status(403).json({ error: 'Only the active player chooses the surviving chain' });
+  }
+  if (!state.mergerContext.candidateChains.includes(survivorChain)) {
+    return res.status(400).json({ error: `${survivorChain} is not one of the tied chains` });
+  }
+
+  const { phase, bonusLogs } = applySurvivorChoice(state, survivorChain);
+  state.log = [
+    ...bonusLogs.map(msg => ({ time: new Date().toISOString(), message: msg })),
+    { time: new Date().toISOString(), message: `${activePlayer.name} chose ${survivorChain} as the surviving chain` },
+    ...(state.log ?? []),
+  ].slice(0, 50);
+
+  if (phase === 'BUY_STOCKS') {
+    state.turnPhase = 'BUY_STOCKS';
+    const { canEnd, reason } = checkEndGameConditions(state);
+    state.endGameAvailable = canEnd;
+    state.endGameReason    = reason ?? null;
+  } else {
+    state.turnPhase = 'MERGER_DECISIONS';
+    await supabase.from('games').update({ status: 'MERGER_PAUSE' }).eq('id', gameId);
+  }
+
+  const saved = await saveState(gameId, state, playerTiles);
+  if (saved.error) return res.status(500).json({ error: saved.error.message });
+  res.json({ publicState: saved.publicState, myTiles: playerTiles[req.user.id] ?? [], drawPileCount: saved.drawPile.length });
+});
+
+// ============================================================
+// POST /api/games/:gameId/merger-decision
+// During MERGER_DECISIONS: a player decides what to do with their
+// defunct chain shares — sell, trade (2-for-1 into survivor), or keep.
+// Once all affected players have decided, the merger advances automatically.
+//
+// Body: { sell: number, trade: number }
+//   keep = (shares held) − sell − trade  (auto-computed server-side)
+// ============================================================
+router.post('/:gameId/merger-decision', async (req, res) => {
+  const { gameId } = req.params;
+  const { sell = 0, trade = 0 } = req.body;
+
+  const loaded = await loadState(gameId);
+  if (!loaded) return res.status(500).json({ error: 'Could not load game state' });
+  const { state, playerTiles } = loaded;
+
+  if (!state.mergerContext) return res.status(400).json({ error: 'No merger in progress' });
+
+  // Validate: caller must be next in line
+  const { valid, error: valError } = validateMergerDecision(state, req.user.id, { sell, trade });
+  if (!valid) return res.status(400).json({ error: valError });
+
+  const player   = state.players.find(p => p.id === req.user.id);
+  const defunct  = state.mergerContext.currentDefunct;
+  const survivor = state.mergerContext.survivorChain;
+  const kept     = (player.stocks[defunct] ?? 0) - Number(sell) - Number(trade);
+
+  // Build log message before applying (shares change after apply)
+  const parts = [];
+  if (Number(sell)  > 0) parts.push(`sold ${sell} ${defunct}`);
+  if (Number(trade) > 0) parts.push(`traded ${trade} → ${Number(trade) / 2} ${survivor}`);
+  if (kept          > 0) parts.push(`kept ${kept} ${defunct}`);
+  const logMsg = `${player.name}: ${parts.length > 0 ? parts.join(', ') : 'kept all shares'}`;
+
+  // Apply the decision (removes player from pendingDecisions)
+  applyMergerDecision(state, req.user.id, { sell, trade });
+
+  state.log = [{ time: new Date().toISOString(), message: logMsg }, ...(state.log ?? [])].slice(0, 50);
+
+  // Record in the merger_decisions audit table
+  const { error: auditError } = await supabase.from('merger_decisions').insert({
+    game_id: gameId, defunct_chain: defunct, player_id: req.user.id,
+    sell: Number(sell), trade: Number(trade), keep: kept,
+  });
+  if (auditError) console.error('[merger_decisions]', auditError.message);
+
+  // If all players for this defunct chain have decided, advance the merger
+  if (state.mergerContext.pendingDecisions.length === 0) {
+    const { phase, bonusLogs } = advanceMerger(state);
+    state.log = [
+      ...bonusLogs.map(msg => ({ time: new Date().toISOString(), message: msg })),
+      ...(state.log ?? []),
+    ].slice(0, 50);
+
+    if (phase === 'BUY_STOCKS') {
+      state.turnPhase = 'BUY_STOCKS';
+      const { canEnd, reason } = checkEndGameConditions(state);
+      state.endGameAvailable = canEnd;
+      state.endGameReason    = reason ?? null;
+      await supabase.from('games').update({ status: 'ACTIVE' }).eq('id', gameId);
+    } else {
+      state.turnPhase = 'MERGER_DECISIONS'; // another defunct chain to resolve
+    }
+  }
+
+  const saved = await saveState(gameId, state, playerTiles);
+  if (saved.error) return res.status(500).json({ error: saved.error.message });
+  res.json({ publicState: saved.publicState, myTiles: playerTiles[req.user.id] ?? [], drawPileCount: saved.drawPile.length });
+});
+
+// ============================================================
+// POST /api/games/:gameId/declare-end-game
+// Active player officially ends the game when end-game conditions are met.
+// Triggers final shareholder bonuses + stock liquidation, then declares a winner.
+// Only callable during BUY_STOCKS phase when endGameAvailable is true.
+// ============================================================
+router.post('/:gameId/declare-end-game', async (req, res) => {
+  const { gameId } = req.params;
+
+  const { data: game } = await supabase.from('games').select('status').eq('id', gameId).single();
+  if (!game || game.status !== 'ACTIVE') return res.status(400).json({ error: 'Game is not active' });
+
+  const loaded = await loadState(gameId);
+  if (!loaded) return res.status(500).json({ error: 'Could not load game state' });
+  const { state, playerTiles } = loaded;
+
+  const activePlayer = state.players[state.activePlayerIndex];
+  if (activePlayer.id !== req.user.id) {
+    return res.status(403).json({ error: 'Only the active player can declare game over' });
+  }
+  if (!state.endGameAvailable) {
+    return res.status(400).json({ error: 'End-game conditions have not been met yet' });
+  }
+  if (state.turnPhase !== 'BUY_STOCKS') {
+    return res.status(400).json({ error: 'End game can only be declared during the buy-stocks phase' });
+  }
+
+  // Run full end-game payout sequence (bonuses + liquidation + rankings)
+  const { logs, winnerId } = executeEndGamePayouts(state);
+
+  state.isGameOver  = true;
+  state.winner      = winnerId;
+  state.turnPhase   = 'GAME_OVER';
+  state.endGameAvailable = false;
+
+  // Prepend all payout log lines (most recent first in our log)
+  for (let i = logs.length - 1; i >= 0; i--) {
+    state.log = [{ time: new Date().toISOString(), message: logs[i] }, ...(state.log ?? [])].slice(0, 100);
+  }
+
+  const saved = await saveState(gameId, state, playerTiles);
+  if (saved.error) return res.status(500).json({ error: saved.error.message });
+
+  await supabase.from('games').update({ status: 'COMPLETE' }).eq('id', gameId);
+
+  res.json({ publicState: saved.publicState, myTiles: playerTiles[req.user.id] ?? [], drawPileCount: saved.drawPile.length });
 });
 
 // ============================================================
@@ -733,7 +997,22 @@ router.post('/:gameId/end-turn', async (req, res) => {
   state.turnPhase = 'PLACE_TILE';
   state.hasActedThisTurn = false;
 
+  // Check whether end-game conditions are met after this turn advance
+  const { canEnd, reason } = checkEndGameConditions(state);
+  state.endGameAvailable = canEnd;
+  state.endGameReason    = reason ?? null;
+
   const nextPlayer = state.players[nextIdx];
+
+  // Auto-replace any tiles in the next player's hand that are permanently unplayable
+  // (e.g., tiles that would merge two safe chains — they can never legally be played)
+  const nextHand   = playerTiles[nextPlayer.id] ?? [];
+  const unplayable = findUnplayableTiles(state, nextHand);
+  if (unplayable.length > 0 && state.drawPile.length > 0) {
+    playerTiles[nextPlayer.id] = nextHand.filter(t => !unplayable.includes(t));
+    const replacements = drawTiles(state.drawPile, unplayable.length);
+    playerTiles[nextPlayer.id] = [...playerTiles[nextPlayer.id], ...replacements];
+  }
   state.log = [{
     time: new Date().toISOString(),
     message: `Turn passed to ${nextPlayer.name}`,

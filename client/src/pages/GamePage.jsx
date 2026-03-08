@@ -10,7 +10,7 @@ const ROWS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 // ---- Client-side tile classification ----
 // Mirrors server/game/boardLogic.js — used for UX highlighting only.
-// The server performs the authoritative check on each API call.
+// The server performs the authoritative check on every API call.
 function getAdjacentCells(tileId) {
   const col    = tileId[0];
   const row    = parseInt(tileId.slice(1));
@@ -32,7 +32,7 @@ function classifyTile(board, chains, tileId) {
     return adjChains.filter(n => chains[n]?.isSafe).length >= 2 ? 'illegal' : 'merge';
   }
   if (adjChains.length === 1) return 'grow';
-  if (adjLone.length > 0) {
+  if (adjLone.length  >  0) {
     return Object.values(chains).filter(c => c.isActive).length >= 7 ? 'illegal' : 'found';
   }
   return 'simple';
@@ -68,27 +68,38 @@ export default function GamePage({ gameId, navigate }) {
   const [loading,       setLoading]       = useState(true);
   const [pollError,     setPollError]     = useState('');
 
-  // ---- Local turn state ----
-  // pendingFoundTile: tile held in memory while the chain-name modal is open
+  // ---- Chain naming modal (founding a new chain) ----
   const [pendingFoundTile, setPendingFoundTile] = useState(null);
   const [showNameModal,    setShowNameModal]    = useState(false);
 
-  // Stocks to buy — built up locally, submitted with End Turn
-  const [stocksToBuy,  setStocksToBuy]  = useState({});  // { chainName: qty }
+  // ---- Survivor choice modal (tied merger) ----
+  const [showSurvivorModal, setShowSurvivorModal] = useState(false);
+  const [survivorCandidates, setSurvivorCandidates] = useState([]); // chains to pick from
 
-  // ---- Loading / error flags ----
-  const [placing,    setPlacing]    = useState(false);  // play-tile in flight
-  const [ending,     setEnding]     = useState(false);  // end-turn in flight
-  const [actionError, setActionError] = useState('');
+  // ---- Merger decision inputs ----
+  const [mergerSell,  setMergerSell]  = useState(0);
+  const [mergerTrade, setMergerTrade] = useState(0);
+
+  // ---- Stock buying ----
+  const [stocksToBuy, setStocksToBuy] = useState({});
+
+  // ---- Loading / action flags ----
+  const [placing,            setPlacing]            = useState(false);
+  const [ending,             setEnding]             = useState(false);
+  const [submittingDecision, setSubmittingDecision] = useState(false);
+  const [declaringEndGame,   setDeclaringEndGame]   = useState(false);
+  const [actionError,        setActionError]        = useState('');
 
   const pollingRef = useRef(null);
 
-  // ---- Helpers to apply a server response to local state ----
+  // ---- Apply any server response to local state ----
   function applyServerResponse(data) {
     setPublicState(data.publicState);
     setMyTiles(data.myTiles);
     setDrawPileCount(data.drawPileCount);
     setPollError('');
+    setMergerSell(0);
+    setMergerTrade(0);
   }
 
   // ---- Polling ----
@@ -109,12 +120,49 @@ export default function GamePage({ gameId, navigate }) {
     return () => clearInterval(pollingRef.current);
   }, [fetchState]);
 
+  // ---- Auto-show the survivor modal when polling reveals CHOOSE_SURVIVOR ----
+  useEffect(() => {
+    const ctx = publicState?.mergerContext;
+    if (
+      publicState?.turnPhase === 'CHOOSE_SURVIVOR' &&
+      publicState?.players?.[publicState.activePlayerIndex]?.id === user?.id &&
+      ctx?.candidateChains?.length > 0 &&
+      !showSurvivorModal
+    ) {
+      setSurvivorCandidates(ctx.candidateChains);
+      setShowSurvivorModal(true);
+    }
+  }, [publicState, user, showSurvivorModal]);
+
   // ---- Derived values ----
-  const activePlayer  = publicState?.players?.[publicState.activePlayerIndex];
-  const isMyTurn      = activePlayer?.id === user?.id;
-  const isPlacePhase  = publicState?.turnPhase === 'PLACE_TILE';
-  const isBuyPhase    = publicState?.turnPhase === 'BUY_STOCKS';
-  const myPlayerInfo  = publicState?.players?.find(p => p.id === user?.id);
+  const activePlayer      = publicState?.players?.[publicState.activePlayerIndex];
+  const isMyTurn          = activePlayer?.id === user?.id;
+  const isPlacePhase      = publicState?.turnPhase === 'PLACE_TILE';
+  const isBuyPhase        = publicState?.turnPhase === 'BUY_STOCKS';
+  const isMergerPhase     = publicState?.turnPhase === 'MERGER_DECISIONS';
+  const isChooseSurvivor  = publicState?.turnPhase === 'CHOOSE_SURVIVOR';
+  const isGameOver        = publicState?.isGameOver === true;
+
+  const myPlayerInfo = publicState?.players?.find(p => p.id === user?.id);
+
+  // Merger context helpers
+  const mergerCtx       = publicState?.mergerContext;
+  const currentDefunct  = mergerCtx?.currentDefunct ?? null;
+  const survivorChain   = mergerCtx?.survivorChain ?? null;
+  const myDefunctShares = currentDefunct ? (myPlayerInfo?.stocks[currentDefunct] ?? 0) : 0;
+  // The defunct chain's size is still valid during decisions (zeroed only after advanceMerger)
+  const defunctPrice    = currentDefunct
+    ? getStockPrice(currentDefunct, publicState?.chains[currentDefunct]?.size ?? 0)
+    : 0;
+  // Am I first in line to make my merger decision?
+  const isMyDecisionTurn = isMergerPhase && mergerCtx?.pendingDecisions?.[0] === user?.id;
+  // Name of the player currently deciding (for waiting messages)
+  const decidingPlayer = isMergerPhase && mergerCtx?.pendingDecisions?.[0]
+    ? publicState?.players?.find(p => p.id === mergerCtx.pendingDecisions[0])
+    : null;
+
+  // Computed keep value for merger decision
+  const mergerKeep = myDefunctShares - mergerSell - mergerTrade;
 
   // Pre-classify every tile in hand for highlighting
   const tileClassifications = {};
@@ -126,35 +174,31 @@ export default function GamePage({ gameId, navigate }) {
 
   const totalStocksToBuy = Object.values(stocksToBuy).reduce((s, q) => s + q, 0);
 
-  // ---- Step 1: tile clicked ----
+  // ============================================================
+  // Turn actions
+  // ============================================================
+
   async function handleTileClick(tileId) {
     if (!isMyTurn || !isPlacePhase || placing) return;
     const cls = tileClassifications[tileId];
     if (!cls || cls === 'illegal') return;
-
-    if (cls === 'merge') {
-      setActionError('Mergers coming soon! This tile would trigger a merger and cannot be played yet.');
-      return;
-    }
-
     setActionError('');
 
-    // Founding tiles need a chain name before we can call the API.
-    // Show the modal and hold the tile in memory.
     if (cls === 'found') {
+      // Need to pick a chain name before submitting
       setPendingFoundTile(tileId);
       setShowNameModal(true);
       return;
     }
 
-    // Simple / grow: call play-tile immediately
-    await submitPlayTile(tileId, null);
+    // simple, grow, or merge — submit to server.
+    // For merge tiles the server will return needsSurvivorChoice if chains are tied.
+    await submitPlayTile(tileId, {});
   }
 
-  // Called from the name modal when the player picks a chain
   async function handleChainChosen(chainName) {
     setShowNameModal(false);
-    await submitPlayTile(pendingFoundTile, chainName);
+    await submitPlayTile(pendingFoundTile, { chainFounded: chainName });
     setPendingFoundTile(null);
   }
 
@@ -163,13 +207,15 @@ export default function GamePage({ gameId, navigate }) {
     setPendingFoundTile(null);
   }
 
-  async function submitPlayTile(tilePlaced, chainFounded) {
+  async function handleSurvivorChosen(chain) {
+    setShowSurvivorModal(false);
+    setSurvivorCandidates([]);
     setPlacing(true);
     setActionError('');
     try {
-      const data = await api.playTile(gameId, { tilePlaced, chainFounded });
+      const data = await api.chooseSurvivor(gameId, chain);
       applyServerResponse(data);
-      setStocksToBuy({}); // reset stock selection for this new buy phase
+      setStocksToBuy({});
     } catch (err) {
       setActionError(err.message);
     } finally {
@@ -177,7 +223,75 @@ export default function GamePage({ gameId, navigate }) {
     }
   }
 
-  // ---- Stock quantity adjustment (local only, submitted with End Turn) ----
+  function handleCancelSurvivorModal() {
+    // Cancelling a merger tie-break is not really possible mid-game,
+    // but allow closing the modal (polling will reopen it if still needed).
+    setShowSurvivorModal(false);
+  }
+
+  async function submitPlayTile(tilePlaced, { chainFounded = null, survivorChain: sc = null } = {}) {
+    setPlacing(true);
+    setActionError('');
+    try {
+      const body = { tilePlaced };
+      if (chainFounded) body.chainFounded = chainFounded;
+      if (sc)           body.survivorChain = sc;
+
+      const data = await api.playTile(gameId, body);
+
+      if (data.needsSurvivorChoice) {
+        // Tied merger — show the survivor choice modal
+        setSurvivorCandidates(data.candidateChains ?? []);
+        setShowSurvivorModal(true);
+        // Also apply publicState so the board shows the tile as placed
+        if (data.publicState) applyServerResponse(data);
+        return;
+      }
+
+      applyServerResponse(data);
+      setStocksToBuy({});
+    } catch (err) {
+      setActionError(err.message);
+    } finally {
+      setPlacing(false);
+    }
+  }
+
+  // ---- Merger decision ----
+  function adjustMergerSell(delta) {
+    const next = mergerSell + delta;
+    if (next < 0 || next + mergerTrade > myDefunctShares) return;
+    setMergerSell(next);
+  }
+
+  function adjustMergerTrade(delta) {
+    const next = mergerTrade + delta;
+    if (next < 0 || next % 2 !== 0) return; // must be even
+    if (mergerSell + next > myDefunctShares) return;
+    // Also check bank has enough survivor shares
+    if (delta > 0 && (publicState?.stockBank[survivorChain] ?? 0) < (next / 2)) return;
+    setMergerTrade(next);
+  }
+
+  async function handleMergerDecision() {
+    if (mergerKeep < 0) {
+      setActionError('Sell + Trade cannot exceed your total shares held');
+      return;
+    }
+    setSubmittingDecision(true);
+    setActionError('');
+    try {
+      const data = await api.mergerDecision(gameId, { sell: mergerSell, trade: mergerTrade });
+      applyServerResponse(data);
+      setStocksToBuy({});
+    } catch (err) {
+      setActionError(err.message);
+    } finally {
+      setSubmittingDecision(false);
+    }
+  }
+
+  // ---- Stock quantity adjustment ----
   function adjustStock(chainName, delta) {
     const currentQty = stocksToBuy[chainName] ?? 0;
     const newQty     = currentQty + delta;
@@ -191,7 +305,7 @@ export default function GamePage({ gameId, navigate }) {
     });
   }
 
-  // ---- Step 3: End Turn ----
+  // ---- End turn ----
   async function handleEndTurn() {
     if (!isMyTurn || !isBuyPhase || ending) return;
     setEnding(true);
@@ -207,7 +321,27 @@ export default function GamePage({ gameId, navigate }) {
     }
   }
 
-  // ---- Loading / error screens ----
+  // ---- Declare end game ----
+  async function handleDeclareEndGame() {
+    if (!window.confirm(
+      'Declare the game over?\n\nFinal shareholder bonuses will be paid, all stocks liquidated, and the winner announced.'
+    )) return;
+    setDeclaringEndGame(true);
+    setActionError('');
+    try {
+      const data = await api.declareEndGame(gameId);
+      applyServerResponse(data);
+    } catch (err) {
+      setActionError(err.message);
+    } finally {
+      setDeclaringEndGame(false);
+    }
+  }
+
+  // ============================================================
+  // Loading / error screens
+  // ============================================================
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
@@ -229,7 +363,69 @@ export default function GamePage({ gameId, navigate }) {
     );
   }
 
-  // ---- Main render ----
+  // ============================================================
+  // Game over screen
+  // ============================================================
+
+  if (isGameOver) {
+    const winner   = publicState.players.find(p => p.id === publicState.winner);
+    const standings = [...publicState.players].sort((a, b) => b.cash - a.cash);
+    return (
+      <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-8">
+        <div className="w-full max-w-md">
+          <h1 className="text-4xl font-bold text-center mb-1">Game Over!</h1>
+          <p className="text-center text-yellow-400 font-semibold text-lg mb-8">
+            🏆 {winner?.name ?? 'Someone'} wins!
+          </p>
+
+          <div className="bg-slate-800 rounded-2xl overflow-hidden mb-6">
+            <div className="px-4 py-2 bg-slate-700 text-xs uppercase tracking-wider text-slate-400 font-semibold">
+              Final Standings
+            </div>
+            {standings.map((p, i) => (
+              <div
+                key={p.id}
+                className={`flex items-center gap-3 px-4 py-3 border-b border-slate-700/50 last:border-0 ${
+                  p.id === publicState.winner ? 'bg-yellow-900/20' : ''
+                }`}
+              >
+                <span className="text-slate-500 font-mono w-6 text-right">#{i + 1}</span>
+                <span className={`flex-1 font-semibold ${p.id === publicState.winner ? 'text-yellow-300' : 'text-white'}`}>
+                  {p.name}
+                  {p.id === user?.id && <span className="text-slate-500 text-xs ml-2">(you)</span>}
+                </span>
+                <span className="tabular-nums font-bold text-slate-200">{formatDollars(p.cash)}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Recent log — shows payout details */}
+          {publicState.log?.length > 0 && (
+            <div className="bg-slate-800/50 rounded-xl p-4 mb-6 max-h-48 overflow-y-auto">
+              <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-2">Game Log</p>
+              <ul className="space-y-1">
+                {publicState.log.slice(0, 20).map((e, i) => (
+                  <li key={i} className="text-[11px] text-slate-400">{e.message}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <button
+            onClick={navigate.toDashboard}
+            className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors"
+          >
+            Back to Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================
+  // Main game render
+  // ============================================================
+
   return (
     <div className="min-h-screen bg-slate-900 text-white flex flex-col">
 
@@ -242,17 +438,29 @@ export default function GamePage({ gameId, navigate }) {
           ← Dashboard
         </button>
 
-        {/* Turn indicator — always visible in the center */}
-        <div className="text-center flex-1">
-          {isMyTurn ? (
-            <span className="font-semibold text-sm">
-              {isPlacePhase
-                ? <span className="text-green-400">Your turn — place a tile</span>
-                : <span className="text-yellow-400">Your turn — buy stocks &amp; end turn</span>
-              }
+        {/* Turn / phase indicator */}
+        <div className="text-center flex-1 text-sm font-semibold">
+          {isMergerPhase && (
+            <span className="text-orange-400">
+              ⚔ Merger — {survivorChain} absorbs {currentDefunct}
+              {mergerCtx?.defunctQueue?.length > 0 ? ` (+${mergerCtx.defunctQueue.length} more)` : ''}
             </span>
-          ) : (
-            <span className="text-slate-400 text-sm">
+          )}
+          {isChooseSurvivor && isMyTurn && (
+            <span className="text-yellow-400">⚔ Tied merger — choose the surviving chain</span>
+          )}
+          {isChooseSurvivor && !isMyTurn && (
+            <span className="text-slate-400">
+              Waiting for <span className="text-white">{activePlayer?.name}</span> to choose the survivor
+            </span>
+          )}
+          {!isMergerPhase && !isChooseSurvivor && isMyTurn && (
+            isPlacePhase
+              ? <span className="text-green-400">Your turn — place a tile</span>
+              : <span className="text-yellow-400">Your turn — buy stocks &amp; end turn</span>
+          )}
+          {!isMergerPhase && !isChooseSurvivor && !isMyTurn && (
+            <span className="text-slate-400">
               Waiting for <span className="text-white font-medium">{activePlayer?.name}</span>
             </span>
           )}
@@ -263,7 +471,7 @@ export default function GamePage({ gameId, navigate }) {
         </div>
       </header>
 
-      {/* ── Body: board (left) + sidebar (right) ── */}
+      {/* ── Body: board + sidebar ── */}
       <div className="flex flex-col lg:flex-row flex-1 min-h-0">
 
         {/* ── Board ── */}
@@ -274,21 +482,16 @@ export default function GamePage({ gameId, navigate }) {
           )}
 
           <div className="w-full max-w-4xl mx-auto overflow-x-auto">
-            {/* 13-column CSS grid: 1 narrow label col + 12 equal board cols */}
             <div className="grid grid-cols-[1.5rem_repeat(12,1fr)] gap-0.5 sm:gap-1">
 
-              <div /> {/* top-left corner spacer */}
-
-              {/* Column headers A–L */}
+              <div />
               {COLS.map(col => (
                 <div key={col} className="text-center text-[clamp(0.4rem,1.2vw,0.65rem)] text-slate-500 font-mono pb-0.5">
                   {col}
                 </div>
               ))}
 
-              {/* 9 rows × 12 cols = 108 board cells */}
               {ROWS.flatMap(row => [
-                // Row label (1–9)
                 <div
                   key={`lbl-${row}`}
                   className="text-[clamp(0.4rem,1.2vw,0.65rem)] text-slate-500 font-mono flex items-center justify-end pr-0.5"
@@ -296,14 +499,13 @@ export default function GamePage({ gameId, navigate }) {
                   {row}
                 </div>,
 
-                // 12 cells for this row
                 ...COLS.map(col => {
                   const tileId    = `${col}${row}`;
                   const cls       = tileClassifications[tileId];
                   const inHand    = myTiles.includes(tileId);
-                  // A tile is clickable only in PLACE_TILE phase when it's legal
+                  // Merge tiles are now clickable (triggers a merger)
                   const clickable = isMyTurn && isPlacePhase && !placing
-                    && inHand && cls !== 'illegal' && cls !== 'merge';
+                    && inHand && cls !== 'illegal';
 
                   return (
                     <BoardCell
@@ -349,7 +551,7 @@ export default function GamePage({ gameId, navigate }) {
                   <th className="py-1 text-left">Chain</th>
                   <th className="py-1 text-right" title="Tiles in chain">Size</th>
                   <th className="py-1 text-right" title="Stock price per share">$/sh</th>
-                  <th className="py-1 text-right" title="Shares remaining in bank">Bank</th>
+                  <th className="py-1 text-right" title="Shares in bank">Bank</th>
                   <th className="py-1 text-right" title="Your shares">Mine</th>
                 </tr>
               </thead>
@@ -360,25 +562,31 @@ export default function GamePage({ gameId, navigate }) {
                   const price    = getStockPrice(name, chain.size);
                   const bank     = publicState.stockBank[name];
                   const myShares = myPlayerInfo?.stocks[name] ?? 0;
+                  const isDefunct = name === currentDefunct; // highlight during merger
+                  const isSurvivor = name === survivorChain && isMergerPhase;
                   return (
                     <tr
                       key={name}
-                      className={`border-b border-slate-700/30 last:border-0 ${!chain.isActive ? 'opacity-30' : ''}`}
+                      className={`border-b border-slate-700/30 last:border-0 ${
+                        !chain.isActive && !isDefunct ? 'opacity-30' : ''
+                      } ${isDefunct ? 'bg-red-900/20' : ''} ${isSurvivor ? 'bg-green-900/10' : ''}`}
                     >
                       <td className="py-1.5">
                         <div className="flex items-center gap-1.5">
-                          <span className={`w-2 h-2 rounded-sm flex-shrink-0 ${chain.isActive ? color.bg : 'bg-slate-600'}`} />
-                          <span className={chain.isActive ? 'text-white' : 'text-slate-500'}>
+                          <span className={`w-2 h-2 rounded-sm flex-shrink-0 ${chain.isActive || isDefunct ? color.bg : 'bg-slate-600'}`} />
+                          <span className={chain.isActive || isDefunct ? 'text-white' : 'text-slate-500'}>
                             {CHAIN_LABELS[name]}
                           </span>
-                          {chain.isSafe && <span className="text-red-400 text-[8px]">🔒</span>}
+                          {chain.isSafe    && <span className="text-red-400 text-[8px]">🔒</span>}
+                          {isDefunct       && <span className="text-red-400 text-[8px]">defunct</span>}
+                          {isSurvivor      && <span className="text-green-400 text-[8px]">survivor</span>}
                         </div>
                       </td>
                       <td className={`py-1.5 text-right tabular-nums ${chain.isSafe ? 'text-red-400 font-bold' : 'text-slate-300'}`}>
-                        {chain.isActive ? chain.size : '—'}
+                        {chain.isActive || isDefunct ? chain.size : '—'}
                       </td>
                       <td className="py-1.5 text-right tabular-nums text-slate-300">
-                        {chain.isActive ? `$${price}` : '—'}
+                        {chain.isActive || isDefunct ? `$${price}` : '—'}
                       </td>
                       <td className="py-1.5 text-right tabular-nums text-slate-500">{bank}</td>
                       <td className={`py-1.5 text-right tabular-nums font-bold ${myShares > 0 ? 'text-indigo-300' : 'text-slate-700'}`}>
@@ -414,9 +622,7 @@ export default function GamePage({ gameId, navigate }) {
                       }`}
                     >
                       <div className="flex items-center gap-1.5 mb-1">
-                        <span className="text-[10px] text-slate-500 font-mono w-4 text-right">
-                          #{rank + 1}
-                        </span>
+                        <span className="text-[10px] text-slate-500 font-mono w-4 text-right">#{rank + 1}</span>
                         <span className={`text-sm font-semibold flex-1 truncate ${p.isRetired ? 'line-through text-slate-500' : 'text-white'}`}>
                           {p.name}
                         </span>
@@ -437,7 +643,7 @@ export default function GamePage({ gameId, navigate }) {
         </aside>
       </div>
 
-      {/* ── Bottom bar: tile hand + buy stocks + end turn ── */}
+      {/* ── Footer: varies by game phase ── */}
       <footer className="sticky bottom-0 z-10 bg-slate-900/95 backdrop-blur-sm border-t border-slate-700">
 
         {/* Error banner */}
@@ -451,152 +657,242 @@ export default function GamePage({ gameId, navigate }) {
 
         <div className="px-4 py-3 space-y-3">
 
-          {/* ── Tile hand (shown in PLACE_TILE phase) ── */}
-          {(isPlacePhase || !isMyTurn) && (
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-slate-500 text-xs uppercase tracking-wider flex-shrink-0">
-                {isMyTurn && isPlacePhase ? 'Your turn — place a tile:' : 'Your tiles:'}
-              </span>
-
-              {myTiles.length === 0 && (
-                <span className="text-slate-600 text-sm italic">No tiles in hand</span>
-              )}
-
-              {myTiles.map(tileId => {
-                const cls      = tileClassifications[tileId];
-                const canPlace = isMyTurn && isPlacePhase && !placing && cls !== 'illegal';
-                const isIllegal = isMyTurn && isPlacePhase && cls === 'illegal';
-                const isMerge   = cls === 'merge';
-
-                return (
-                  <button
-                    key={tileId}
-                    onClick={() => handleTileClick(tileId)}
-                    disabled={!canPlace || placing}
-                    title={
-                      isIllegal ? `${tileId} — cannot be played` :
-                      isMerge   ? `${tileId} — merger (Phase 4)` :
-                      tileId
-                    }
-                    className={`
-                      px-3 py-2 rounded-lg font-mono font-bold text-sm border-2 transition-all touch-manipulation
-                      ${canPlace
-                        ? 'bg-indigo-600 border-indigo-400 text-white hover:bg-indigo-500 active:scale-95 cursor-pointer'
-                        : (isIllegal || isMerge)
-                          ? 'bg-slate-800 border-slate-700 text-slate-600 opacity-40 cursor-not-allowed'
-                          : 'bg-slate-700 border-slate-600 text-slate-300 cursor-default'
-                      }
-                    `}
-                  >
-                    {placing ? '…' : tileId}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          {/* ── Buy stocks panel (shown in BUY_STOCKS phase) ── */}
-          {isMyTurn && isBuyPhase && (
+          {/* ── MERGER DECISIONS phase ── */}
+          {isMergerPhase && isMyDecisionTurn && (
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-slate-400 text-xs uppercase tracking-wider">
-                  Buy stocks (optional, max 3 total)
-                </span>
-                <span className="text-slate-500 text-xs tabular-nums">
-                  {totalStocksToBuy}/3
-                </span>
+              <div className="bg-orange-900/30 border border-orange-700/50 rounded-xl p-3">
+                <p className="text-orange-300 font-semibold text-sm mb-0.5">
+                  ⚔ Merger Decision — {CHAIN_LABELS[currentDefunct] ?? currentDefunct}
+                </p>
+                <p className="text-slate-400 text-xs">
+                  You hold <span className="text-white font-bold">{myDefunctShares}</span> shares
+                  worth <span className="text-white font-bold">${defunctPrice}</span> each.
+                  {survivorChain && (
+                    <> Survivor: <span className="text-white font-bold">{CHAIN_LABELS[survivorChain] ?? survivorChain}</span>.</>
+                  )}
+                </p>
               </div>
 
-              {/* One pill per active chain with enough bank shares */}
-              <div className="flex flex-wrap gap-2">
-                {CHAIN_ORDER
-                  .filter(name => publicState.chains[name].isActive && publicState.stockBank[name] > 0)
-                  .map(name => {
-                    const qty    = stocksToBuy[name] ?? 0;
-                    const price  = getStockPrice(name, publicState.chains[name].size);
-                    const color  = CHAIN_COLORS[name];
-                    const canAdd = totalStocksToBuy < 3 && qty < publicState.stockBank[name];
+              <div className="flex gap-3 flex-wrap">
+                {/* Sell control */}
+                <div className="flex items-center gap-1.5 bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5">
+                  <span className="text-xs text-slate-400 font-medium">Sell</span>
+                  <button onClick={() => adjustMergerSell(-1)} disabled={mergerSell <= 0}
+                    className="w-5 h-5 rounded bg-black/30 hover:bg-black/50 disabled:opacity-30 font-bold text-xs flex items-center justify-center">−</button>
+                  <span className="w-6 text-center font-bold tabular-nums text-sm text-red-300">{mergerSell}</span>
+                  <button onClick={() => adjustMergerSell(+1)} disabled={mergerSell + mergerTrade >= myDefunctShares}
+                    className="w-5 h-5 rounded bg-black/30 hover:bg-black/50 disabled:opacity-30 font-bold text-xs flex items-center justify-center">+</button>
+                  {mergerSell > 0 && (
+                    <span className="text-[10px] text-green-400 ml-1">+{formatDollars(mergerSell * defunctPrice)}</span>
+                  )}
+                </div>
 
-                    return (
-                      <div
-                        key={name}
-                        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-colors ${
-                          qty > 0
-                            ? `${color.bg} ${color.text} border-transparent`
-                            : 'bg-slate-800 border-slate-600 text-slate-300'
-                        }`}
-                      >
-                        <span className="text-xs font-semibold">{CHAIN_LABELS[name]}</span>
-                        <span className="text-[10px] opacity-70">${price}</span>
-                        <button
-                          onClick={() => adjustStock(name, -1)}
-                          disabled={qty === 0}
-                          className="w-5 h-5 rounded bg-black/20 hover:bg-black/40 disabled:opacity-30 font-bold text-xs flex items-center justify-center"
-                        >−</button>
-                        <span className="w-4 text-center font-bold tabular-nums text-sm">{qty}</span>
-                        <button
-                          onClick={() => adjustStock(name, +1)}
-                          disabled={!canAdd}
-                          className="w-5 h-5 rounded bg-black/20 hover:bg-black/40 disabled:opacity-30 font-bold text-xs flex items-center justify-center"
-                        >+</button>
-                      </div>
-                    );
-                  })}
+                {/* Trade control (2-for-1) */}
+                <div className="flex items-center gap-1.5 bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5">
+                  <span className="text-xs text-slate-400 font-medium">Trade</span>
+                  <button onClick={() => adjustMergerTrade(-2)} disabled={mergerTrade <= 0}
+                    className="w-5 h-5 rounded bg-black/30 hover:bg-black/50 disabled:opacity-30 font-bold text-xs flex items-center justify-center">−</button>
+                  <span className="w-6 text-center font-bold tabular-nums text-sm text-blue-300">{mergerTrade}</span>
+                  <button onClick={() => adjustMergerTrade(+2)} disabled={mergerSell + mergerTrade >= myDefunctShares}
+                    className="w-5 h-5 rounded bg-black/30 hover:bg-black/50 disabled:opacity-30 font-bold text-xs flex items-center justify-center">+</button>
+                  {mergerTrade > 0 && (
+                    <span className="text-[10px] text-blue-400 ml-1">→ {mergerTrade / 2} {CHAIN_LABELS[survivorChain]}</span>
+                  )}
+                </div>
 
-                {CHAIN_ORDER.filter(n => publicState.chains[n].isActive && publicState.stockBank[n] > 0).length === 0 && (
-                  <span className="text-slate-600 text-sm italic">No stocks available to buy right now.</span>
-                )}
+                {/* Keep (auto-computed) */}
+                <div className="flex items-center gap-1.5 bg-slate-800/50 border border-slate-700 rounded-lg px-2.5 py-1.5">
+                  <span className="text-xs text-slate-500 font-medium">Keep</span>
+                  <span className={`font-bold text-sm tabular-nums ${mergerKeep < 0 ? 'text-red-400' : 'text-slate-400'}`}>
+                    {mergerKeep}
+                  </span>
+                </div>
               </div>
 
-              {/* Cost preview */}
-              {totalStocksToBuy > 0 && (() => {
-                const cost = Object.entries(stocksToBuy).reduce((sum, [name, qty]) =>
-                  sum + getStockPrice(name, publicState.chains[name].size) * qty, 0);
-                const afterCash = (myPlayerInfo?.cash ?? 0) - cost;
-                return (
-                  <p className="text-xs text-slate-400">
-                    Cost: <span className="text-white font-semibold">{formatDollars(cost)}</span>
-                    <span className="text-slate-500 ml-2">→ {formatDollars(afterCash)} remaining</span>
-                  </p>
-                );
-              })()}
-
-              {/* End Turn button */}
               <button
-                onClick={handleEndTurn}
-                disabled={ending}
-                className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-2.5 rounded-lg transition-colors"
+                onClick={handleMergerDecision}
+                disabled={submittingDecision || mergerKeep < 0}
+                className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-2.5 rounded-lg transition-colors"
               >
-                {ending
-                  ? 'Ending turn…'
-                  : totalStocksToBuy > 0
-                    ? `Buy ${totalStocksToBuy} share${totalStocksToBuy > 1 ? 's' : ''} & End Turn →`
-                    : 'Skip Stocks & End Turn →'
-                }
+                {submittingDecision ? 'Submitting…' : 'Confirm Decision →'}
               </button>
             </div>
           )}
 
-          {/* Waiting message (not my turn) */}
-          {!isMyTurn && (
+          {/* Waiting for another player's merger decision */}
+          {isMergerPhase && !isMyDecisionTurn && (
             <p className="text-center text-slate-500 text-sm py-1">
-              Waiting for <span className="text-slate-300 font-medium">{activePlayer?.name}</span> to play…
-              <span className="text-slate-700 ml-2 text-xs">(auto-refreshes every 10s)</span>
+              ⚔ Merger in progress — waiting for{' '}
+              <span className="text-orange-300 font-medium">{decidingPlayer?.name ?? '…'}</span>{' '}
+              to decide on their <span className="text-white">{CHAIN_LABELS[currentDefunct] ?? currentDefunct}</span> shares.
+            </p>
+          )}
+
+          {/* Normal phases: tile hand + buy stocks + end turn */}
+          {!isMergerPhase && !isChooseSurvivor && (
+            <>
+              {/* ── Tile hand (PLACE_TILE phase or spectating) ── */}
+              {(isPlacePhase || !isMyTurn) && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-slate-500 text-xs uppercase tracking-wider flex-shrink-0">
+                    {isMyTurn && isPlacePhase ? 'Your turn — place a tile:' : 'Your tiles:'}
+                  </span>
+
+                  {myTiles.length === 0 && (
+                    <span className="text-slate-600 text-sm italic">No tiles in hand</span>
+                  )}
+
+                  {myTiles.map(tileId => {
+                    const cls       = tileClassifications[tileId];
+                    const canPlace  = isMyTurn && isPlacePhase && !placing && cls !== 'illegal';
+                    const isIllegal = isMyTurn && isPlacePhase && cls === 'illegal';
+                    const isMerge   = cls === 'merge';
+
+                    return (
+                      <button
+                        key={tileId}
+                        onClick={() => handleTileClick(tileId)}
+                        disabled={!canPlace || placing}
+                        title={
+                          isIllegal ? `${tileId} — cannot be played (illegal)` :
+                          isMerge   ? `${tileId} — triggers a merger` :
+                          tileId
+                        }
+                        className={`
+                          px-3 py-2 rounded-lg font-mono font-bold text-sm border-2 transition-all touch-manipulation
+                          ${canPlace && isMerge
+                            ? 'bg-orange-700 border-orange-500 text-white hover:bg-orange-600 active:scale-95 cursor-pointer'
+                            : canPlace
+                              ? 'bg-indigo-600 border-indigo-400 text-white hover:bg-indigo-500 active:scale-95 cursor-pointer'
+                              : isIllegal
+                                ? 'bg-slate-800 border-slate-700 text-slate-600 opacity-40 cursor-not-allowed'
+                                : 'bg-slate-700 border-slate-600 text-slate-300 cursor-default'
+                          }
+                        `}
+                      >
+                        {placing ? '…' : tileId}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* ── Buy stocks + End Turn (BUY_STOCKS phase) ── */}
+              {isMyTurn && isBuyPhase && (
+                <div className="space-y-2">
+
+                  {/* End-game available banner */}
+                  {publicState.endGameAvailable && (
+                    <div className="bg-yellow-900/30 border border-yellow-600/50 rounded-lg px-3 py-2 flex items-center justify-between gap-3">
+                      <p className="text-yellow-300 text-xs font-medium">
+                        🏁 End game available — {publicState.endGameReason}
+                      </p>
+                      <button
+                        onClick={handleDeclareEndGame}
+                        disabled={declaringEndGame}
+                        className="bg-yellow-600 hover:bg-yellow-500 disabled:opacity-50 text-white font-bold text-xs px-3 py-1.5 rounded-lg transition-colors flex-shrink-0"
+                      >
+                        {declaringEndGame ? 'Ending…' : 'End Game'}
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400 text-xs uppercase tracking-wider">
+                      Buy stocks (optional, max 3)
+                    </span>
+                    <span className="text-slate-500 text-xs tabular-nums">{totalStocksToBuy}/3</span>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    {CHAIN_ORDER
+                      .filter(name => publicState.chains[name].isActive && publicState.stockBank[name] > 0)
+                      .map(name => {
+                        const qty    = stocksToBuy[name] ?? 0;
+                        const price  = getStockPrice(name, publicState.chains[name].size);
+                        const color  = CHAIN_COLORS[name];
+                        const canAdd = totalStocksToBuy < 3 && qty < publicState.stockBank[name];
+
+                        return (
+                          <div
+                            key={name}
+                            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-colors ${
+                              qty > 0
+                                ? `${color.bg} ${color.text} border-transparent`
+                                : 'bg-slate-800 border-slate-600 text-slate-300'
+                            }`}
+                          >
+                            <span className="text-xs font-semibold">{CHAIN_LABELS[name]}</span>
+                            <span className="text-[10px] opacity-70">${price}</span>
+                            <button onClick={() => adjustStock(name, -1)} disabled={qty === 0}
+                              className="w-5 h-5 rounded bg-black/20 hover:bg-black/40 disabled:opacity-30 font-bold text-xs flex items-center justify-center">−</button>
+                            <span className="w-4 text-center font-bold tabular-nums text-sm">{qty}</span>
+                            <button onClick={() => adjustStock(name, +1)} disabled={!canAdd}
+                              className="w-5 h-5 rounded bg-black/20 hover:bg-black/40 disabled:opacity-30 font-bold text-xs flex items-center justify-center">+</button>
+                          </div>
+                        );
+                      })}
+
+                    {CHAIN_ORDER.filter(n => publicState.chains[n].isActive && publicState.stockBank[n] > 0).length === 0 && (
+                      <span className="text-slate-600 text-sm italic">No stocks available to buy.</span>
+                    )}
+                  </div>
+
+                  {/* Cost preview */}
+                  {totalStocksToBuy > 0 && (() => {
+                    const cost = Object.entries(stocksToBuy).reduce((sum, [name, qty]) =>
+                      sum + getStockPrice(name, publicState.chains[name].size) * qty, 0);
+                    const afterCash = (myPlayerInfo?.cash ?? 0) - cost;
+                    return (
+                      <p className="text-xs text-slate-400">
+                        Cost: <span className="text-white font-semibold">{formatDollars(cost)}</span>
+                        <span className="text-slate-500 ml-2">→ {formatDollars(afterCash)} remaining</span>
+                      </p>
+                    );
+                  })()}
+
+                  <button
+                    onClick={handleEndTurn}
+                    disabled={ending}
+                    className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-2.5 rounded-lg transition-colors"
+                  >
+                    {ending
+                      ? 'Ending turn…'
+                      : totalStocksToBuy > 0
+                        ? `Buy ${totalStocksToBuy} share${totalStocksToBuy > 1 ? 's' : ''} & End Turn →`
+                        : 'Skip Stocks & End Turn →'
+                    }
+                  </button>
+                </div>
+              )}
+
+              {/* Waiting message (not my turn) */}
+              {!isMyTurn && (
+                <p className="text-center text-slate-500 text-sm py-1">
+                  Waiting for <span className="text-slate-300 font-medium">{activePlayer?.name}</span> to play…
+                  <span className="text-slate-700 ml-2 text-xs">(auto-refreshes every 10s)</span>
+                </p>
+              )}
+            </>
+          )}
+
+          {/* CHOOSE_SURVIVOR: show waiting message in footer too */}
+          {isChooseSurvivor && (
+            <p className="text-center text-orange-400 text-sm py-1 font-medium">
+              {isMyTurn ? '⚔ Choose the surviving chain above…' : `Waiting for ${activePlayer?.name} to choose the surviving chain…`}
             </p>
           )}
         </div>
       </footer>
 
-      {/* ── Chain naming modal (shown when a founding tile is selected) ── */}
+      {/* ── Chain naming modal (founding a new hotel) ── */}
       {showNameModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-slate-800 border border-slate-600 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
             <h2 className="text-xl font-bold mb-1">Name Your Chain</h2>
             <p className="text-slate-400 text-sm mb-5">
-              Tile <span className="text-white font-mono font-bold">{pendingFoundTile}</span> founds a new hotel.
-              Which chain?
+              Tile <span className="text-white font-mono font-bold">{pendingFoundTile}</span> founds a new hotel. Which chain?
             </p>
-
             <div className="grid grid-cols-2 gap-2 mb-4">
               {getAvailableChains(publicState.chains).map(name => {
                 const color = CHAIN_COLORS[name];
@@ -611,12 +907,40 @@ export default function GamePage({ gameId, navigate }) {
                 );
               })}
             </div>
-
-            <button
-              onClick={handleCancelNameModal}
-              className="w-full text-slate-400 hover:text-white text-sm underline transition-colors"
-            >
+            <button onClick={handleCancelNameModal} className="w-full text-slate-400 hover:text-white text-sm underline transition-colors">
               Cancel — pick a different tile
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Survivor choice modal (tied merger) ── */}
+      {showSurvivorModal && survivorCandidates.length > 0 && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800 border border-orange-700/50 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+            <h2 className="text-xl font-bold mb-1">⚔ Tied Merger!</h2>
+            <p className="text-slate-400 text-sm mb-5">
+              These chains are the same size. Choose which one <span className="text-white font-semibold">survives</span>.
+              The others will be absorbed.
+            </p>
+            <div className="grid grid-cols-2 gap-2 mb-4">
+              {survivorCandidates.map(name => {
+                const color = CHAIN_COLORS[name];
+                const size  = publicState.chains[name]?.size ?? 0;
+                return (
+                  <button
+                    key={name}
+                    onClick={() => handleSurvivorChosen(name)}
+                    className={`py-3 px-4 rounded-xl font-bold text-sm transition-all hover:scale-105 active:scale-95 ${color.bg} ${color.text} flex flex-col items-center`}
+                  >
+                    <span>{CHAIN_LABELS[name]}</span>
+                    <span className="text-[10px] opacity-70 font-normal mt-0.5">{size} tiles</span>
+                  </button>
+                );
+              })}
+            </div>
+            <button onClick={handleCancelSurvivorModal} className="w-full text-slate-400 hover:text-white text-sm underline transition-colors">
+              Cancel
             </button>
           </div>
         </div>

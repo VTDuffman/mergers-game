@@ -75,6 +75,17 @@ export default function DashboardPage({ navigate }) {
     }
   }
 
+  async function handleDeleteGame(gameId) {
+    if (!window.confirm('Delete this game? This cannot be undone.')) return;
+    setError('');
+    try {
+      await api.deleteGame(gameId);
+      setGames(prev => prev.filter(g => g.id !== gameId));
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   async function handleDecline(inviteId) {
     setError('');
     try {
@@ -195,21 +206,32 @@ export default function DashboardPage({ navigate }) {
           ) : (
             <div className="space-y-3">
               {games.map(game => (
-                <button
-                  key={game.id}
-                  onClick={() => game.status === 'ACTIVE' ? navigate.toGame(game.id) : navigate.toLobby(game.id)}
-                  className="w-full bg-slate-800 border border-slate-700 hover:border-slate-500 rounded-xl p-4 flex items-center justify-between gap-4 text-left transition-colors"
-                >
-                  <div>
-                    <p className="font-medium">{game.name}</p>
-                    <p className="text-slate-500 text-sm mt-0.5">
-                      {new Date(game.created_at).toLocaleDateString()}
-                    </p>
-                  </div>
-                  <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${STATUS_STYLES[game.status] ?? STATUS_STYLES.COMPLETE}`}>
-                    {STATUS_LABELS[game.status] ?? game.status}
-                  </span>
-                </button>
+                <div key={game.id} className="flex items-center gap-2">
+                  <button
+                    onClick={() => game.status === 'ACTIVE' ? navigate.toGame(game.id) : navigate.toLobby(game.id)}
+                    className="flex-1 bg-slate-800 border border-slate-700 hover:border-slate-500 rounded-xl p-4 flex items-center justify-between gap-4 text-left transition-colors"
+                  >
+                    <div>
+                      <p className="font-medium">{game.name}</p>
+                      <p className="text-slate-500 text-sm mt-0.5">
+                        {new Date(game.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${STATUS_STYLES[game.status] ?? STATUS_STYLES.COMPLETE}`}>
+                      {STATUS_LABELS[game.status] ?? game.status}
+                    </span>
+                  </button>
+                  {/* Delete button — host only, LOBBY only */}
+                  {game.host_id === user?.id && game.status === 'LOBBY' && (
+                    <button
+                      onClick={() => handleDeleteGame(game.id)}
+                      className="text-slate-600 hover:text-red-400 transition-colors p-2 flex-shrink-0"
+                      title="Delete game"
+                    >
+                      🗑
+                    </button>
+                  )}
+                </div>
               ))}
             </div>
           )}

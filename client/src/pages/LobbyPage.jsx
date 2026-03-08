@@ -2,6 +2,10 @@ import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { api } from '../lib/api.js';
 
+// How often to poll for lobby updates (ms).
+// Keeps the host's player list and invite statuses in sync automatically.
+const POLL_INTERVAL_MS = 10_000;
+
 // Status badge styling for each invite status
 const INVITE_STATUS_STYLES = {
   PENDING:  'bg-yellow-500/20 text-yellow-300',
@@ -46,7 +50,13 @@ export default function LobbyPage({ gameId, navigate }) {
     }
   }, [gameId]);
 
-  useEffect(() => { loadLobby(); }, [loadLobby]);
+  // Initial load + auto-poll every POLL_INTERVAL_MS so invite statuses
+  // and confirmed player counts stay fresh without a manual browser refresh.
+  useEffect(() => {
+    loadLobby();
+    const intervalId = setInterval(loadLobby, POLL_INTERVAL_MS);
+    return () => clearInterval(intervalId);
+  }, [loadLobby]);
 
   // ---- Helper to show a temporary success message ----
   function showSuccess(msg) {
@@ -97,19 +107,30 @@ export default function LobbyPage({ gameId, navigate }) {
     }
   }
 
+  async function handleDelete() {
+    if (!window.confirm('Delete this game? This cannot be undone.')) return;
+    setError('');
+    try {
+      await api.deleteGame(gameId);
+      navigate.toDashboard();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   // ---- Derived values for the Start button ----
   const pendingInviteCount = invites.filter(i => i.status === 'PENDING').length;
   const confirmedPlayerCount = players.length;
 
-  // Blocked if any invite is still pending or there aren't at least 2 players
+  // Blocked if any invite is still pending or fewer than 2 players have confirmed
   const canStart = isHost
     && game?.status === 'LOBBY'
     && pendingInviteCount === 0
     && confirmedPlayerCount >= 2;
 
   function getStartBlockReason() {
-    if (pendingInviteCount > 0)     return `Waiting for ${pendingInviteCount} invite(s) to be accepted or declined`;
-    if (confirmedPlayerCount < 2)   return 'At least 2 players must accept to start';
+    if (pendingInviteCount > 0)   return `Waiting for ${pendingInviteCount} invite(s) to be accepted or declined`;
+    if (confirmedPlayerCount < 2) return 'At least 2 players must accept to start';
     return '';
   }
 
@@ -140,12 +161,21 @@ export default function LobbyPage({ gameId, navigate }) {
       <div className="max-w-2xl mx-auto px-4 py-8">
 
         {/* Navigation */}
-        <button
-          onClick={navigate.toDashboard}
-          className="text-slate-400 hover:text-white text-sm mb-6 flex items-center gap-1 transition-colors"
-        >
-          ← Back to Dashboard
-        </button>
+        <div className="flex items-center justify-between mb-6">
+          <button
+            onClick={navigate.toDashboard}
+            className="text-slate-400 hover:text-white text-sm flex items-center gap-1 transition-colors"
+          >
+            ← Back to Dashboard
+          </button>
+          <button
+            onClick={loadLobby}
+            className="text-slate-500 hover:text-slate-300 text-xs transition-colors"
+            title="Refresh player list and invite statuses"
+          >
+            ↻ Refresh
+          </button>
+        </div>
 
         {/* Game Header */}
         <div className="mb-8">
@@ -157,19 +187,27 @@ export default function LobbyPage({ gameId, navigate }) {
               </p>
             </div>
 
-            {/* Start Game button — host only */}
+            {/* Host actions — Start and Delete */}
             {isHost && game.status === 'LOBBY' && (
-              <div className="text-right flex-shrink-0">
-                <button
-                  onClick={handleStart}
-                  disabled={!canStart || starting}
-                  title={!canStart ? getStartBlockReason() : ''}
-                  className="bg-green-600 hover:bg-green-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold px-5 py-2.5 rounded-lg transition-colors"
-                >
-                  {starting ? 'Starting…' : 'Start Game'}
-                </button>
+              <div className="text-right flex-shrink-0 flex flex-col items-end gap-2">
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleDelete}
+                    className="bg-red-900/60 hover:bg-red-700 text-red-300 hover:text-white font-medium px-4 py-2.5 rounded-lg transition-colors text-sm"
+                  >
+                    Delete Game
+                  </button>
+                  <button
+                    onClick={handleStart}
+                    disabled={!canStart || starting}
+                    title={!canStart ? getStartBlockReason() : ''}
+                    className="bg-green-600 hover:bg-green-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold px-5 py-2.5 rounded-lg transition-colors"
+                  >
+                    {starting ? 'Starting…' : 'Start Game'}
+                  </button>
+                </div>
                 {!canStart && (
-                  <p className="text-slate-500 text-xs mt-1.5 max-w-[180px]">
+                  <p className="text-slate-500 text-xs max-w-[220px]">
                     {getStartBlockReason()}
                   </p>
                 )}
