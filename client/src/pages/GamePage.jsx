@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
+import { motion, AnimatePresence, useMotionValue, animate, useMotionValueEvent } from 'framer-motion';
 import { useAuth } from '../context/AuthContext.jsx';
 import { api } from '../lib/api.js';
 import BoardCell, { CHAIN_COLORS } from '../components/Game/Board/BoardCell.jsx';
@@ -87,6 +88,30 @@ function getRankedHolders(players, chainName) {
 }
 
 // ============================================================
+// AnimatedDollar
+// Smoothly counts a dollar value up or down whenever it changes.
+// Uses framer-motion's animate() to drive a local display state.
+// ============================================================
+function AnimatedDollar({ value, className }) {
+  const mv      = useMotionValue(value);
+  const [display, setDisplay] = useState(value);
+
+  // Subscribe to the motion value and update display state on each frame
+  useMotionValueEvent(mv, 'change', (latest) => setDisplay(Math.round(latest)));
+
+  // Whenever the target value changes, animate the motion value to it
+  useEffect(() => {
+    const controls = animate(mv, value, {
+      duration: 0.55,
+      ease: [0.16, 1, 0.3, 1], // expo out — fast start, smooth finish
+    });
+    return controls.stop;
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return <span className={className}>{formatDollars(display)}</span>;
+}
+
+// ============================================================
 // GamePage
 // Props:
 //   gameId   {string}  — UUID of the active game
@@ -125,6 +150,14 @@ export default function GamePage({ gameId, navigate }) {
   const [actionError,        setActionError]        = useState('');
 
   const pollingRef = useRef(null);
+
+  // ── Animation refs ──
+  // Track the previous board to detect newly-placed tiles (for tile-drop spring)
+  const prevBoardRef = useRef(null);
+  const [justPlacedTiles, setJustPlacedTiles] = useState(new Set());
+  // Track previous shareholder ranks to detect new majority holders (for takeover flash)
+  const prevRanksRef = useRef({});
+  const [flashKeys,  setFlashKeys]  = useState(new Set());
 
   // ---- Apply any server response to local state ----
   function applyServerResponse(data) {
@@ -167,6 +200,49 @@ export default function GamePage({ gameId, navigate }) {
       setShowSurvivorModal(true);
     }
   }, [publicState, user, showSurvivorModal]);
+
+  // ── Effect: detect newly-placed tiles for the tile-drop spring animation ──
+  useEffect(() => {
+    const board = publicState?.board;
+    if (!board) { prevBoardRef.current = null; return; }
+
+    let timer;
+    if (prevBoardRef.current) {
+      const newlyPlaced = Object.keys(board).filter(
+        id => board[id] !== 'empty' && prevBoardRef.current[id] === 'empty'
+      );
+      if (newlyPlaced.length > 0) {
+        setJustPlacedTiles(new Set(newlyPlaced));
+        // Clear after spring animation finishes (~700 ms)
+        timer = setTimeout(() => setJustPlacedTiles(new Set()), 700);
+      }
+    }
+    prevBoardRef.current = board;
+    return () => clearTimeout(timer);
+  }, [publicState?.board]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Effect: detect when a player becomes the new sole majority holder ──
+  useEffect(() => {
+    if (!publicState?.players) return;
+    const newFlashes = [];
+    for (const chainName of CHAIN_ORDER) {
+      if (!publicState.chains[chainName]?.isActive) continue;
+      const ranked = getRankedHolders(publicState.players, chainName);
+      for (const { id, rank } of ranked) {
+        const key  = `${chainName}-${id}`;
+        const prev = prevRanksRef.current[key];
+        // Flash only when a player *newly* takes sole 1st (not on first load, not if already 1st)
+        if (rank === '1st' && prev !== undefined && prev !== '1st') {
+          newFlashes.push(key);
+        }
+        prevRanksRef.current[key] = rank;
+      }
+    }
+    if (newFlashes.length === 0) return;
+    setFlashKeys(new Set(newFlashes));
+    const timer = setTimeout(() => setFlashKeys(new Set()), 1100);
+    return () => clearTimeout(timer);
+  }, [publicState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Derived values ----
   const activePlayer      = publicState?.players?.[publicState.activePlayerIndex];
@@ -541,17 +617,25 @@ export default function GamePage({ gameId, navigate }) {
                   const clickable = isMyTurn && isPlacePhase && !placing
                     && inHand && cls !== 'illegal';
 
+                  const isNew = justPlacedTiles.has(tileId);
                   return (
-                    <BoardCell
+                    // motion.div is the grid item; scale animation is purely visual (no layout shift)
+                    <motion.div
                       key={tileId}
-                      tileId={tileId}
-                      cellState={publicState.board[tileId]}
-                      isInHand={inHand}
-                      isLegal={clickable}
-                      isMyTurn={isMyTurn}
-                      isPlacePhase={isPlacePhase}
-                      onClick={() => handleTileClick(tileId)}
-                    />
+                      animate={isNew ? { scale: [1.45, 1] } : {}}
+                      transition={{ type: 'spring', stiffness: 380, damping: 14 }}
+                      style={{ zIndex: isNew ? 10 : undefined, position: 'relative' }}
+                    >
+                      <BoardCell
+                        tileId={tileId}
+                        cellState={publicState.board[tileId]}
+                        isInHand={inHand}
+                        isLegal={clickable}
+                        isMyTurn={isMyTurn}
+                        isPlacePhase={isPlacePhase}
+                        onClick={() => handleTileClick(tileId)}
+                      />
+                    </motion.div>
                   );
                 }),
               ])}
@@ -646,30 +730,45 @@ export default function GamePage({ gameId, navigate }) {
                           {ranked.every(p => p.shares === 0) ? (
                             <span className="text-[10px] text-slate-600 italic">No shares held</span>
                           ) : (
-                            <div className="flex flex-wrap gap-1">
-                              {ranked.map(({ id, name: pName, shares, rank }) => {
-                                const isMe = id === user?.id;
-                                const badge =
-                                  rank === '1st' ? <span className="text-yellow-400 font-bold ml-0.5">1st</span> :
-                                  rank === 'tie' ? <span className="text-yellow-500 ml-0.5">tie</span> :
-                                  rank === '2nd' ? <span className="text-slate-400 ml-0.5">2nd</span> :
-                                  null;
-                                return (
-                                  <span
-                                    key={id}
-                                    className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px]
-                                      ${isMe
-                                        ? 'bg-cyan-900/60 border border-cyan-700'
-                                        : 'bg-slate-800/60 border border-slate-700'}
-                                      ${shares === 0 ? 'opacity-40' : ''}`}
-                                  >
-                                    <span className={isMe ? 'text-cyan-200' : 'text-slate-300'}>{pName}</span>
-                                    <span className="tabular-nums font-bold text-white ml-1">{shares}</span>
-                                    {badge}
-                                  </span>
-                                );
-                              })}
-                            </div>
+                            // motion.div so the container itself can FLIP when its size changes
+                            <motion.div layout className="flex flex-wrap gap-1">
+                              {/* initial={false} prevents entrance animation on first page load */}
+                              <AnimatePresence initial={false} mode="popLayout">
+                                {ranked.map(({ id, name: pName, shares, rank }) => {
+                                  const isMe       = id === user?.id;
+                                  const flashKey   = `${name}-${id}`;
+                                  const isFlashing = flashKeys.has(flashKey);
+                                  const badge =
+                                    rank === '1st' ? <span className="text-yellow-400 font-bold ml-0.5">1st</span> :
+                                    rank === 'tie' ? <span className="text-yellow-500 ml-0.5">tie</span> :
+                                    rank === '2nd' ? <span className="text-slate-400 ml-0.5">2nd</span> :
+                                    null;
+                                  return (
+                                    <motion.span
+                                      key={id}
+                                      layout
+                                      initial={{ opacity: 0, scale: 0.75 }}
+                                      animate={{ opacity: shares === 0 ? 0.4 : 1, scale: 1 }}
+                                      exit={{ opacity: 0, scale: 0.75 }}
+                                      transition={{
+                                        layout: { type: 'spring', stiffness: 350, damping: 30 },
+                                        opacity: { duration: 0.2 },
+                                        scale:   { type: 'spring', stiffness: 300, damping: 25 },
+                                      }}
+                                      className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px]
+                                        ${isMe
+                                          ? 'bg-cyan-900/60 border border-cyan-700'
+                                          : 'bg-slate-800/60 border border-slate-700'}
+                                        ${isFlashing ? 'badge-flash-first' : ''}`}
+                                    >
+                                      <span className={isMe ? 'text-cyan-200' : 'text-slate-300'}>{pName}</span>
+                                      <span className="tabular-nums font-bold text-white ml-1">{shares}</span>
+                                      {badge}
+                                    </motion.span>
+                                  );
+                                })}
+                              </AnimatePresence>
+                            </motion.div>
                           )}
                         </td>
                       </tr>
@@ -717,9 +816,9 @@ export default function GamePage({ gameId, navigate }) {
                       </div>
                       <div className="ml-5 flex justify-between text-[11px]">
                         <span className="text-slate-500">
-                          Cash: <span className="text-slate-300 tabular-nums">{formatDollars(p.cash)}</span>
+                          Cash: <AnimatedDollar value={p.cash} className="text-slate-300 tabular-nums" />
                         </span>
-                        <span className="text-slate-200 font-bold tabular-nums">{formatDollars(net)}</span>
+                        <AnimatedDollar value={net} className="text-slate-200 font-bold tabular-nums" />
                       </div>
                     </li>
                   );
@@ -743,76 +842,89 @@ export default function GamePage({ gameId, navigate }) {
 
         <div className="px-4 py-3 space-y-3">
 
-          {/* ── MERGER DECISIONS phase ── */}
-          {isMergerPhase && isMyDecisionTurn && (
-            <div className="space-y-2">
-              <div className="bg-orange-900/30 border border-orange-700/50 rounded-xl p-3">
-                <p className="text-orange-300 font-semibold text-sm mb-0.5">
-                  ⚔ Merger Decision — {CHAIN_LABELS[currentDefunct] ?? currentDefunct}
-                </p>
-                <p className="text-slate-400 text-xs">
-                  You hold <span className="text-white font-bold">{myDefunctShares}</span> shares
-                  worth <span className="text-white font-bold">${defunctPrice}</span> each.
-                  {survivorChain && (
-                    <> Survivor: <span className="text-white font-bold">{CHAIN_LABELS[survivorChain] ?? survivorChain}</span>.</>
-                  )}
-                </p>
-              </div>
-
-              <div className="flex gap-3 flex-wrap">
-                {/* Sell control */}
-                <div className="flex items-center gap-1.5 bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5">
-                  <span className="text-xs text-slate-400 font-medium">Sell</span>
-                  <button onClick={() => adjustMergerSell(-1)} disabled={mergerSell <= 0}
-                    className="w-5 h-5 rounded bg-black/30 hover:bg-black/50 disabled:opacity-30 font-bold text-xs flex items-center justify-center">−</button>
-                  <span className="w-6 text-center font-bold tabular-nums text-sm text-red-300">{mergerSell}</span>
-                  <button onClick={() => adjustMergerSell(+1)} disabled={mergerSell + mergerTrade >= myDefunctShares}
-                    className="w-5 h-5 rounded bg-black/30 hover:bg-black/50 disabled:opacity-30 font-bold text-xs flex items-center justify-center">+</button>
-                  {mergerSell > 0 && (
-                    <span className="text-[10px] text-green-400 ml-1">+{formatDollars(mergerSell * defunctPrice)}</span>
-                  )}
-                </div>
-
-                {/* Trade control (2-for-1) */}
-                <div className="flex items-center gap-1.5 bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5">
-                  <span className="text-xs text-slate-400 font-medium">Trade</span>
-                  <button onClick={() => adjustMergerTrade(-2)} disabled={mergerTrade <= 0}
-                    className="w-5 h-5 rounded bg-black/30 hover:bg-black/50 disabled:opacity-30 font-bold text-xs flex items-center justify-center">−</button>
-                  <span className="w-6 text-center font-bold tabular-nums text-sm text-blue-300">{mergerTrade}</span>
-                  <button onClick={() => adjustMergerTrade(+2)} disabled={mergerSell + mergerTrade >= myDefunctShares}
-                    className="w-5 h-5 rounded bg-black/30 hover:bg-black/50 disabled:opacity-30 font-bold text-xs flex items-center justify-center">+</button>
-                  {mergerTrade > 0 && (
-                    <span className="text-[10px] text-blue-400 ml-1">→ {mergerTrade / 2} {CHAIN_LABELS[survivorChain]}</span>
-                  )}
-                </div>
-
-                {/* Keep (auto-computed) */}
-                <div className="flex items-center gap-1.5 bg-slate-800/50 border border-slate-700 rounded-lg px-2.5 py-1.5">
-                  <span className="text-xs text-slate-500 font-medium">Keep</span>
-                  <span className={`font-bold text-sm tabular-nums ${mergerKeep < 0 ? 'text-red-400' : 'text-slate-400'}`}>
-                    {mergerKeep}
-                  </span>
-                </div>
-              </div>
-
-              <button
-                onClick={handleMergerDecision}
-                disabled={submittingDecision || mergerKeep < 0}
-                className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-2.5 rounded-lg transition-colors neon-glow-orange-ui"
+          {/* ── MERGER DECISIONS phase — drops in from above with orange glow ── */}
+          <AnimatePresence>
+            {isMergerPhase && (
+              <motion.div
+                key="merger-panel"
+                initial={{ y: -40, opacity: 0 }}
+                animate={{
+                  y: 0,
+                  opacity: 1,
+                  boxShadow: '0 0 24px rgba(249,115,22,0.45), 0 0 48px rgba(249,115,22,0.15)',
+                }}
+                exit={{ y: -20, opacity: 0 }}
+                transition={{ type: 'spring', stiffness: 300, damping: 28 }}
               >
-                {submittingDecision ? 'Submitting…' : 'Confirm Decision →'}
-              </button>
-            </div>
-          )}
+                {isMyDecisionTurn ? (
+                  <div className="space-y-2">
+                    <div className="bg-orange-900/30 border border-orange-700/50 rounded-xl p-3">
+                      <p className="text-orange-300 font-semibold text-sm mb-0.5">
+                        ⚔ Merger Decision — {CHAIN_LABELS[currentDefunct] ?? currentDefunct}
+                      </p>
+                      <p className="text-slate-400 text-xs">
+                        You hold <span className="text-white font-bold">{myDefunctShares}</span> shares
+                        worth <span className="text-white font-bold">${defunctPrice}</span> each.
+                        {survivorChain && (
+                          <> Survivor: <span className="text-white font-bold">{CHAIN_LABELS[survivorChain] ?? survivorChain}</span>.</>
+                        )}
+                      </p>
+                    </div>
 
-          {/* Waiting for another player's merger decision */}
-          {isMergerPhase && !isMyDecisionTurn && (
-            <p className="text-center text-slate-500 text-sm py-1">
-              ⚔ Merger in progress — waiting for{' '}
-              <span className="text-orange-300 font-medium">{decidingPlayer?.name ?? '…'}</span>{' '}
-              to decide on their <span className="text-white">{CHAIN_LABELS[currentDefunct] ?? currentDefunct}</span> shares.
-            </p>
-          )}
+                    <div className="flex gap-3 flex-wrap">
+                      {/* Sell control */}
+                      <div className="flex items-center gap-1.5 bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5">
+                        <span className="text-xs text-slate-400 font-medium">Sell</span>
+                        <button onClick={() => adjustMergerSell(-1)} disabled={mergerSell <= 0}
+                          className="w-5 h-5 rounded bg-black/30 hover:bg-black/50 disabled:opacity-30 font-bold text-xs flex items-center justify-center">−</button>
+                        <span className="w-6 text-center font-bold tabular-nums text-sm text-red-300">{mergerSell}</span>
+                        <button onClick={() => adjustMergerSell(+1)} disabled={mergerSell + mergerTrade >= myDefunctShares}
+                          className="w-5 h-5 rounded bg-black/30 hover:bg-black/50 disabled:opacity-30 font-bold text-xs flex items-center justify-center">+</button>
+                        {mergerSell > 0 && (
+                          <span className="text-[10px] text-green-400 ml-1">+{formatDollars(mergerSell * defunctPrice)}</span>
+                        )}
+                      </div>
+
+                      {/* Trade control (2-for-1) */}
+                      <div className="flex items-center gap-1.5 bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5">
+                        <span className="text-xs text-slate-400 font-medium">Trade</span>
+                        <button onClick={() => adjustMergerTrade(-2)} disabled={mergerTrade <= 0}
+                          className="w-5 h-5 rounded bg-black/30 hover:bg-black/50 disabled:opacity-30 font-bold text-xs flex items-center justify-center">−</button>
+                        <span className="w-6 text-center font-bold tabular-nums text-sm text-blue-300">{mergerTrade}</span>
+                        <button onClick={() => adjustMergerTrade(+2)} disabled={mergerSell + mergerTrade >= myDefunctShares}
+                          className="w-5 h-5 rounded bg-black/30 hover:bg-black/50 disabled:opacity-30 font-bold text-xs flex items-center justify-center">+</button>
+                        {mergerTrade > 0 && (
+                          <span className="text-[10px] text-blue-400 ml-1">→ {mergerTrade / 2} {CHAIN_LABELS[survivorChain]}</span>
+                        )}
+                      </div>
+
+                      {/* Keep (auto-computed) */}
+                      <div className="flex items-center gap-1.5 bg-slate-800/50 border border-slate-700 rounded-lg px-2.5 py-1.5">
+                        <span className="text-xs text-slate-500 font-medium">Keep</span>
+                        <span className={`font-bold text-sm tabular-nums ${mergerKeep < 0 ? 'text-red-400' : 'text-slate-400'}`}>
+                          {mergerKeep}
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={handleMergerDecision}
+                      disabled={submittingDecision || mergerKeep < 0}
+                      className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-2.5 rounded-lg transition-colors neon-glow-orange-ui"
+                    >
+                      {submittingDecision ? 'Submitting…' : 'Confirm Decision →'}
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-center text-slate-500 text-sm py-1">
+                    ⚔ Merger in progress — waiting for{' '}
+                    <span className="text-orange-300 font-medium">{decidingPlayer?.name ?? '…'}</span>{' '}
+                    to decide on their <span className="text-white">{CHAIN_LABELS[currentDefunct] ?? currentDefunct}</span> shares.
+                  </p>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* Normal phases: tile hand + buy stocks + end turn */}
           {!isMergerPhase && !isChooseSurvivor && (
