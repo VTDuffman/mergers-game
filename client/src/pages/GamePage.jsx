@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { api } from '../lib/api.js';
 import BoardCell, { CHAIN_COLORS } from '../components/Game/Board/BoardCell.jsx';
@@ -50,6 +50,40 @@ function calcNetWorth(player, chains) {
     }
   }
   return worth;
+}
+
+/**
+ * For an active chain, returns every player annotated with their bonus rank:
+ *   '1st'  — sole majority holder
+ *   'tie'  — tied for the most shares (all tied leaders split both bonuses)
+ *   '2nd'  — sole second-place holder (or tied for second behind a sole leader)
+ *   null   — everyone else
+ * Sorted by share count descending; zero-holders included last.
+ */
+function getRankedHolders(players, chainName) {
+  const sorted = [...players]
+    .map(p => ({ id: p.id, name: p.name, shares: p.stocks?.[chainName] ?? 0 }))
+    .sort((a, b) => b.shares - a.shares);
+
+  if (sorted.length === 0) return sorted;
+
+  const topShares = sorted[0].shares;
+  const topTied   = sorted.filter(p => p.shares === topShares && p.shares > 0);
+
+  // If leader is tied, all at the top split both bonuses — no separate 2nd place
+  const secondShares = (topTied.length === 1 && sorted.length > 1)
+    ? sorted.find(p => p.shares < topShares && p.shares > 0)?.shares ?? null
+    : null;
+
+  return sorted.map(p => {
+    if (p.shares === topShares && p.shares > 0) {
+      return { ...p, rank: topTied.length > 1 ? 'tie' : '1st' };
+    }
+    if (secondShares !== null && p.shares === secondShares) {
+      return { ...p, rank: '2nd' };
+    }
+    return { ...p, rank: null };
+  });
 }
 
 // ============================================================
@@ -552,54 +586,106 @@ export default function GamePage({ gameId, navigate }) {
                   <th className="py-1 text-right" title="Tiles in chain">Size</th>
                   <th className="py-1 text-right" title="Stock price per share">$/sh</th>
                   <th className="py-1 text-right" title="Shares in bank">Bank</th>
-                  <th className="py-1 text-right" title="Your shares">Mine</th>
                 </tr>
               </thead>
               <tbody>
                 {CHAIN_ORDER.map(name => {
-                  const chain    = publicState.chains[name];
-                  const color    = CHAIN_COLORS[name];
-                  const price    = getStockPrice(name, chain.size);
-                  const bank     = publicState.stockBank[name];
-                  const myShares = myPlayerInfo?.stocks[name] ?? 0;
-                  const isDefunct = name === currentDefunct; // highlight during merger
+                  const chain      = publicState.chains[name];
+                  const color      = CHAIN_COLORS[name];
+                  const price      = getStockPrice(name, chain.size);
+                  const bank       = publicState.stockBank[name];
+                  const isDefunct  = name === currentDefunct;
                   const isSurvivor = name === survivorChain && isMergerPhase;
+
+                  // Inactive chains: simple dimmed single row, no shareholder detail
+                  if (!chain.isActive && !isDefunct) {
+                    return (
+                      <tr key={name} className="border-b border-slate-700/30 last:border-0 opacity-30">
+                        <td className="py-1.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-sm flex-shrink-0 bg-slate-600" />
+                            <span className="text-slate-500">{CHAIN_LABELS[name]}</span>
+                          </div>
+                        </td>
+                        <td className="py-1.5 text-right tabular-nums text-slate-600">—</td>
+                        <td className="py-1.5 text-right tabular-nums text-slate-600">—</td>
+                        <td className="py-1.5 text-right tabular-nums text-slate-600">{bank}</td>
+                      </tr>
+                    );
+                  }
+
+                  // Active (or defunct during merger): main info row + per-player holdings row
+                  const ranked = getRankedHolders(publicState.players, name);
                   return (
-                    <tr
-                      key={name}
-                      className={`border-b border-slate-700/30 last:border-0 ${
-                        !chain.isActive && !isDefunct ? 'opacity-30' : ''
-                      } ${isDefunct ? 'bg-red-900/20' : ''} ${isSurvivor ? 'bg-green-900/10' : ''}`}
-                    >
-                      <td className="py-1.5">
-                        <div className="flex items-center gap-1.5">
-                          <span className={`w-2 h-2 rounded-sm flex-shrink-0 ${chain.isActive || isDefunct ? color.bg : 'bg-slate-600'}`} />
-                          <span className={chain.isActive || isDefunct ? 'text-white' : 'text-slate-500'}>
-                            {CHAIN_LABELS[name]}
-                          </span>
-                          {chain.isSafe    && <span className="text-red-400 text-[8px]">🔒</span>}
-                          {isDefunct       && <span className="text-red-400 text-[8px]">defunct</span>}
-                          {isSurvivor      && <span className="text-green-400 text-[8px]">survivor</span>}
-                        </div>
-                      </td>
-                      <td className={`py-1.5 text-right tabular-nums ${chain.isSafe ? 'text-red-400 font-bold' : 'text-slate-300'}`}>
-                        {chain.isActive || isDefunct ? chain.size : '—'}
-                      </td>
-                      <td className="py-1.5 text-right tabular-nums text-slate-300">
-                        {chain.isActive || isDefunct ? `$${price}` : '—'}
-                      </td>
-                      <td className="py-1.5 text-right tabular-nums text-slate-500">{bank}</td>
-                      <td className={`py-1.5 text-right tabular-nums font-bold ${myShares > 0 ? 'text-indigo-300' : 'text-slate-700'}`}>
-                        {myShares || '—'}
-                      </td>
-                    </tr>
+                    <Fragment key={name}>
+                      {/* Main chain info row */}
+                      <tr className={`border-b border-slate-700/20 ${isDefunct ? 'bg-red-900/20' : ''} ${isSurvivor ? 'bg-green-900/10' : ''}`}>
+                        <td className="px-0 pt-2 pb-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className={`w-2 h-2 rounded-sm flex-shrink-0 ${color.bg}`} />
+                            <span className="text-white font-medium">{CHAIN_LABELS[name]}</span>
+                            {chain.isSafe  && <span className="text-red-400 text-[8px]">🔒</span>}
+                            {isDefunct     && <span className="text-red-400 text-[8px] ml-0.5">defunct</span>}
+                            {isSurvivor    && <span className="text-green-400 text-[8px] ml-0.5">survivor</span>}
+                          </div>
+                        </td>
+                        <td className={`pt-2 pb-1 text-right tabular-nums font-medium ${chain.isSafe ? 'text-red-400' : 'text-slate-300'}`}>
+                          {chain.size}
+                        </td>
+                        <td className="pt-2 pb-1 text-right tabular-nums text-slate-300">
+                          ${price}
+                        </td>
+                        <td className="pt-2 pb-1 text-right tabular-nums text-slate-500">
+                          {bank}
+                        </td>
+                      </tr>
+
+                      {/* Per-player shareholder row */}
+                      <tr className="border-b border-slate-700/50 last:border-0">
+                        <td colSpan={4} className="pb-2 pt-0">
+                          {ranked.every(p => p.shares === 0) ? (
+                            <span className="text-[10px] text-slate-600 italic">No shares held</span>
+                          ) : (
+                            <div className="flex flex-wrap gap-1">
+                              {ranked.map(({ id, name: pName, shares, rank }) => {
+                                const isMe = id === user?.id;
+                                const badge =
+                                  rank === '1st' ? <span className="text-yellow-400 font-bold ml-0.5">1st</span> :
+                                  rank === 'tie' ? <span className="text-yellow-500 ml-0.5">tie</span> :
+                                  rank === '2nd' ? <span className="text-slate-400 ml-0.5">2nd</span> :
+                                  null;
+                                return (
+                                  <span
+                                    key={id}
+                                    className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px]
+                                      ${isMe
+                                        ? 'bg-indigo-900/60 border border-indigo-700'
+                                        : 'bg-slate-700/60 border border-slate-600'}
+                                      ${shares === 0 ? 'opacity-40' : ''}`}
+                                  >
+                                    <span className={isMe ? 'text-indigo-200' : 'text-slate-300'}>{pName}</span>
+                                    <span className="tabular-nums font-bold text-white ml-1">{shares}</span>
+                                    {badge}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    </Fragment>
                   );
                 })}
               </tbody>
             </table>
-            <p className="text-[9px] text-slate-600 mt-1.5">
-              🔒 Safe = 11+ tiles (cannot be merged)
-            </p>
+            <div className="mt-1.5 text-[9px] text-slate-600 space-y-0.5">
+              <div>
+                <span className="text-yellow-400 font-bold">1st</span> = majority bonus &nbsp;
+                <span className="text-slate-400">2nd</span> = minority bonus &nbsp;
+                <span className="text-yellow-500">tie</span> = split both bonuses
+              </div>
+              <div>🔒 Safe = 11+ tiles (cannot be merged)</div>
+            </div>
           </section>
 
           {/* Player standings */}
