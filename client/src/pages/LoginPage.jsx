@@ -4,10 +4,10 @@ export default function LoginPage() {
   const { signInWithGoogle } = useAuth();
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
+    <div className="min-h-screen bg-black text-slate-200 flex items-center justify-center">
       <div className="text-center max-w-md w-full px-6">
-        <h1 className="text-4xl font-bold mb-2">Hotel Shenanigans</h1>
-        <p className="text-slate-400 mb-10">
+        <h1 className="text-4xl font-display neon-text text-cyan-400 mb-2">Hotel Shenanigans</h1>
+        <p className="text-slate-500 mb-10">
           The classic board game, played async — on your schedule.
         </p>
         <button

@@ -378,7 +378,7 @@ export default function GamePage({ gameId, navigate }) {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
+      <div className="min-h-screen bg-black text-slate-200 flex items-center justify-center">
         <p className="text-slate-500 text-sm">Loading game…</p>
       </div>
     );
@@ -386,7 +386,7 @@ export default function GamePage({ gameId, navigate }) {
 
   if (!publicState) {
     return (
-      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
+      <div className="min-h-screen bg-black text-slate-200 flex items-center justify-center">
         <div className="text-center">
           <p className="text-red-400 mb-4">{pollError || 'Game state not found.'}</p>
           <button onClick={navigate.toDashboard} className="text-blue-400 underline text-sm">
@@ -405,15 +405,15 @@ export default function GamePage({ gameId, navigate }) {
     const winner   = publicState.players.find(p => p.id === publicState.winner);
     const standings = [...publicState.players].sort((a, b) => b.cash - a.cash);
     return (
-      <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-8">
+      <div className="min-h-screen bg-black text-slate-200 flex flex-col items-center justify-center p-8">
         <div className="w-full max-w-md">
-          <h1 className="text-4xl font-bold text-center mb-1">Game Over!</h1>
+          <h1 className="text-4xl font-display neon-text text-cyan-400 text-center mb-1">Game Over!</h1>
           <p className="text-center text-yellow-400 font-semibold text-lg mb-8">
             🏆 {winner?.name ?? 'Someone'} wins!
           </p>
 
-          <div className="bg-slate-800 rounded-2xl overflow-hidden mb-6">
-            <div className="px-4 py-2 bg-slate-700 text-xs uppercase tracking-wider text-slate-400 font-semibold">
+          <div className="bg-slate-900 rounded-2xl overflow-hidden mb-6 border border-slate-800">
+            <div className="px-4 py-2 bg-slate-800 text-xs uppercase tracking-wider text-slate-400 font-display">
               Final Standings
             </div>
             {standings.map((p, i) => (
@@ -447,7 +447,7 @@ export default function GamePage({ gameId, navigate }) {
 
           <button
             onClick={navigate.toDashboard}
-            className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors"
+            className="w-full bg-cyan-600 hover:bg-cyan-500 text-black font-bold py-3 rounded-xl transition-colors neon-glow-cyan"
           >
             Back to Dashboard
           </button>
@@ -461,10 +461,10 @@ export default function GamePage({ gameId, navigate }) {
   // ============================================================
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white flex flex-col">
+    <div className="min-h-screen bg-black text-slate-200 flex flex-col">
 
       {/* ── Top bar ── */}
-      <header className="flex items-center justify-between px-4 py-2 border-b border-slate-700 bg-slate-900/95 sticky top-0 z-20 gap-4">
+      <header className="flex items-center justify-between px-4 py-2 border-b border-slate-800 bg-black/95 sticky top-0 z-20 gap-4">
         <button
           onClick={navigate.toDashboard}
           className="text-slate-400 hover:text-white text-sm transition-colors flex-shrink-0"
@@ -572,11 +572,11 @@ export default function GamePage({ gameId, navigate }) {
         </main>
 
         {/* ── Sidebar ── */}
-        <aside className="lg:w-72 xl:w-80 border-t lg:border-t-0 lg:border-l border-slate-700 overflow-y-auto flex-shrink-0">
+        <aside className="lg:w-72 xl:w-80 border-t lg:border-t-0 lg:border-l border-slate-800 overflow-y-auto flex-shrink-0">
 
           {/* Hotel chain table */}
-          <section className="p-3 border-b border-slate-700">
-            <h2 className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-2">
+          <section className="p-3 border-b border-slate-800">
+            <h2 className="text-[10px] uppercase tracking-widest text-slate-500 font-display mb-2">
               Hotel Chains
             </h2>
             <table className="w-full text-xs">
@@ -618,9 +618,9 @@ export default function GamePage({ gameId, navigate }) {
                   const ranked = getRankedHolders(publicState.players, name);
                   return (
                     <Fragment key={name}>
-                      {/* Main chain info row */}
-                      <tr className={`border-b border-slate-700/20 ${isDefunct ? 'bg-red-900/20' : ''} ${isSurvivor ? 'bg-green-900/10' : ''}`}>
-                        <td className="px-0 pt-2 pb-1">
+                      {/* Main chain info row — colored left border acts as a neon stripe */}
+                      <tr className={`border-b border-slate-800/50 ${isDefunct ? 'bg-red-900/20' : ''} ${isSurvivor ? 'bg-green-900/10' : ''}`}>
+                        <td className={`pl-2 pt-2 pb-1 border-l-2 ${color.border}`}>
                           <div className="flex items-center gap-1.5">
                             <span className={`w-2 h-2 rounded-sm flex-shrink-0 ${color.bg}`} />
                             <span className="text-white font-medium">{CHAIN_LABELS[name]}</span>
@@ -659,11 +659,11 @@ export default function GamePage({ gameId, navigate }) {
                                     key={id}
                                     className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px]
                                       ${isMe
-                                        ? 'bg-indigo-900/60 border border-indigo-700'
-                                        : 'bg-slate-700/60 border border-slate-600'}
+                                        ? 'bg-cyan-900/60 border border-cyan-700'
+                                        : 'bg-slate-800/60 border border-slate-700'}
                                       ${shares === 0 ? 'opacity-40' : ''}`}
                                   >
-                                    <span className={isMe ? 'text-indigo-200' : 'text-slate-300'}>{pName}</span>
+                                    <span className={isMe ? 'text-cyan-200' : 'text-slate-300'}>{pName}</span>
                                     <span className="tabular-nums font-bold text-white ml-1">{shares}</span>
                                     {badge}
                                   </span>
@@ -690,7 +690,7 @@ export default function GamePage({ gameId, navigate }) {
 
           {/* Player standings */}
           <section className="p-3">
-            <h2 className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-2">
+            <h2 className="text-[10px] uppercase tracking-widest text-slate-500 font-display mb-2">
               Standings
             </h2>
             <ul className="space-y-2">
@@ -704,7 +704,7 @@ export default function GamePage({ gameId, navigate }) {
                     <li
                       key={p.id}
                       className={`rounded-lg px-2.5 py-2 border-l-2 ${
-                        isActive ? 'border-indigo-500 bg-indigo-900/20' : 'border-transparent bg-slate-800/40'
+                        isActive ? 'border-cyan-500 bg-cyan-900/20' : 'border-transparent bg-slate-900/60'
                       }`}
                     >
                       <div className="flex items-center gap-1.5 mb-1">
@@ -713,7 +713,7 @@ export default function GamePage({ gameId, navigate }) {
                           {p.name}
                         </span>
                         {isMe     && <span className="text-[9px] text-slate-500">(you)</span>}
-                        {isActive && !isMe && <span className="text-[9px] text-indigo-400">▶</span>}
+                        {isActive && !isMe && <span className="text-[9px] text-cyan-400">▶</span>}
                       </div>
                       <div className="ml-5 flex justify-between text-[11px]">
                         <span className="text-slate-500">
@@ -730,7 +730,7 @@ export default function GamePage({ gameId, navigate }) {
       </div>
 
       {/* ── Footer: varies by game phase ── */}
-      <footer className="sticky bottom-0 z-10 bg-slate-900/95 backdrop-blur-sm border-t border-slate-700">
+      <footer className="sticky bottom-0 z-10 bg-black/95 backdrop-blur-sm border-t border-slate-800">
 
         {/* Error banner */}
         {actionError && (
@@ -798,7 +798,7 @@ export default function GamePage({ gameId, navigate }) {
               <button
                 onClick={handleMergerDecision}
                 disabled={submittingDecision || mergerKeep < 0}
-                className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-2.5 rounded-lg transition-colors"
+                className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-2.5 rounded-lg transition-colors neon-glow-orange-ui"
               >
                 {submittingDecision ? 'Submitting…' : 'Confirm Decision →'}
               </button>
@@ -847,9 +847,9 @@ export default function GamePage({ gameId, navigate }) {
                         className={`
                           px-3 py-2 rounded-lg font-mono font-bold text-sm border-2 transition-all touch-manipulation
                           ${canPlace && isMerge
-                            ? 'bg-orange-700 border-orange-500 text-white hover:bg-orange-600 active:scale-95 cursor-pointer'
+                            ? 'bg-orange-600 border-orange-400 text-white hover:bg-orange-500 active:scale-95 cursor-pointer neon-glow-orange'
                             : canPlace
-                              ? 'bg-indigo-600 border-indigo-400 text-white hover:bg-indigo-500 active:scale-95 cursor-pointer'
+                              ? 'bg-cyan-600 border-cyan-400 text-black hover:bg-cyan-500 active:scale-95 cursor-pointer neon-glow-cyan'
                               : isIllegal
                                 ? 'bg-slate-800 border-slate-700 text-slate-600 opacity-40 cursor-not-allowed'
                                 : 'bg-slate-700 border-slate-600 text-slate-300 cursor-default'
@@ -940,7 +940,7 @@ export default function GamePage({ gameId, navigate }) {
                   <button
                     onClick={handleEndTurn}
                     disabled={ending}
-                    className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-2.5 rounded-lg transition-colors"
+                    className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-2.5 rounded-lg transition-colors neon-glow-green"
                   >
                     {ending
                       ? 'Ending turn…'
@@ -974,8 +974,8 @@ export default function GamePage({ gameId, navigate }) {
       {/* ── Chain naming modal (founding a new hotel) ── */}
       {showNameModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-800 border border-slate-600 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
-            <h2 className="text-xl font-bold mb-1">Name Your Chain</h2>
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+            <h2 className="text-xl font-display mb-1">Name Your Chain</h2>
             <p className="text-slate-400 text-sm mb-5">
               Tile <span className="text-white font-mono font-bold">{pendingFoundTile}</span> founds a new hotel. Which chain?
             </p>
@@ -1003,8 +1003,8 @@ export default function GamePage({ gameId, navigate }) {
       {/* ── Survivor choice modal (tied merger) ── */}
       {showSurvivorModal && survivorCandidates.length > 0 && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-800 border border-orange-700/50 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
-            <h2 className="text-xl font-bold mb-1">⚔ Tied Merger!</h2>
+          <div className="bg-slate-900 border border-orange-600/60 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+            <h2 className="text-xl font-display mb-1">⚔ Tied Merger!</h2>
             <p className="text-slate-400 text-sm mb-5">
               These chains are the same size. Choose which one <span className="text-white font-semibold">survives</span>.
               The others will be absorbed.

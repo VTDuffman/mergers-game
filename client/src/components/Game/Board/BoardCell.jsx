@@ -1,13 +1,14 @@
-// Color scheme for each hotel chain.
-// Exported so the ChainTable (Phase 3) can reuse the same colors.
+// Color scheme for each hotel chain — neon Vegas palette.
+// bg/text/border are Tailwind classes; glow is a custom CSS class from index.css.
+// Exported so GamePage and other components can reuse the same colors.
 export const CHAIN_COLORS = {
-  tower:       { bg: 'bg-yellow-400',  text: 'text-yellow-900',  border: 'border-yellow-300' },
-  luxor:       { bg: 'bg-orange-500',  text: 'text-white',       border: 'border-orange-400' },
-  american:    { bg: 'bg-blue-500',    text: 'text-white',       border: 'border-blue-400'   },
-  worldwide:   { bg: 'bg-purple-600',  text: 'text-white',       border: 'border-purple-500' },
-  festival:    { bg: 'bg-green-500',   text: 'text-white',       border: 'border-green-400'  },
-  imperial:    { bg: 'bg-pink-500',    text: 'text-white',       border: 'border-pink-400'   },
-  continental: { bg: 'bg-red-600',     text: 'text-white',       border: 'border-red-500'    },
+  tower:       { bg: 'bg-yellow-400',  text: 'text-black',  border: 'border-yellow-300', glow: 'neon-glow-gold'   },
+  luxor:       { bg: 'bg-orange-500',  text: 'text-white',  border: 'border-orange-400', glow: 'neon-glow-orange' },
+  american:    { bg: 'bg-cyan-500',    text: 'text-black',  border: 'border-cyan-400',   glow: 'neon-glow-cyan'   },
+  worldwide:   { bg: 'bg-purple-500',  text: 'text-white',  border: 'border-purple-400', glow: 'neon-glow-violet' },
+  festival:    { bg: 'bg-lime-500',    text: 'text-black',  border: 'border-lime-400',   glow: 'neon-glow-lime'   },
+  imperial:    { bg: 'bg-pink-500',    text: 'text-white',  border: 'border-pink-400',   glow: 'neon-glow-pink'   },
+  continental: { bg: 'bg-red-500',     text: 'text-white',  border: 'border-red-400',    glow: 'neon-glow-red'    },
 };
 
 /**
@@ -26,22 +27,25 @@ export default function BoardCell({
   tileId, cellState, isInHand, isLegal, isMyTurn, isPlacePhase, onClick,
 }) {
   // Determine appearance based on board state + hand state
-  let bgClass     = 'bg-slate-700 border-slate-600';
-  let textClass   = 'text-transparent'; // invisible for empty cells
+  let bgClass     = 'bg-slate-800 border-slate-700'; // darker base for black background
+  let textClass   = 'text-transparent';              // invisible for empty cells
   let borderClass = 'border';
+  let glowClass   = '';
   let label       = tileId;
   let clickable   = false;
 
   if (cellState !== 'empty') {
     // --- Tile is placed on the board ---
     if (cellState === 'lone') {
-      bgClass   = 'bg-slate-300';
-      textClass = 'text-slate-600';
+      // Unaffiliated placed tile — neutral grey
+      bgClass   = 'bg-slate-400';
+      textClass = 'text-slate-800';
     } else if (CHAIN_COLORS[cellState]) {
-      // Part of a named chain (Phase 3+)
+      // Part of a named chain — neon color + matching glow
       bgClass     = CHAIN_COLORS[cellState].bg;
       textClass   = CHAIN_COLORS[cellState].text;
       borderClass = `border ${CHAIN_COLORS[cellState].border}`;
+      glowClass   = CHAIN_COLORS[cellState].glow;
     }
 
   } else if (isInHand) {
@@ -50,19 +54,20 @@ export default function BoardCell({
 
     if (isMyTurn && isPlacePhase) {
       if (isLegal) {
-        // Bright and clickable — player can place this tile
-        bgClass     = 'bg-indigo-600';
-        textClass   = 'text-white';
-        borderClass = 'border border-indigo-400';
+        // Bright and clickable — neon cyan highlight
+        bgClass     = 'bg-cyan-600';
+        textClass   = 'text-black';
+        borderClass = 'border border-cyan-400';
+        glowClass   = 'neon-glow-cyan';
         clickable   = true;
       } else {
         // In hand but illegal — greyed out, cannot play
-        bgClass   = 'bg-slate-600 opacity-40';
-        textClass = 'text-slate-400';
+        bgClass   = 'bg-slate-700 opacity-40';
+        textClass = 'text-slate-500';
       }
     } else {
       // In hand, but not our turn or not place phase — subtle indicator
-      bgClass   = 'bg-slate-600';
+      bgClass   = 'bg-slate-700';
       textClass = 'text-slate-400';
     }
   }
@@ -76,7 +81,7 @@ export default function BoardCell({
       className={`
         w-full aspect-square rounded-sm text-[clamp(0.4rem,1.2vw,0.7rem)] font-mono font-bold
         flex items-center justify-center select-none transition-all
-        ${bgClass} ${textClass} ${borderClass}
+        ${bgClass} ${textClass} ${borderClass} ${glowClass}
         ${clickable ? 'cursor-pointer touch-manipulation sm:hover:brightness-125 sm:hover:scale-105' : 'cursor-default'}
       `}
     >

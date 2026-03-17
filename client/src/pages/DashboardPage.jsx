@@ -5,9 +5,9 @@ import { api } from '../lib/api.js';
 // Badge colors for each game status
 const STATUS_STYLES = {
   LOBBY:         'bg-yellow-500/20 text-yellow-300',
-  ACTIVE:        'bg-green-500/20  text-green-300',
+  ACTIVE:        'bg-cyan-500/20   text-cyan-300',
   MERGER_PAUSE:  'bg-orange-500/20 text-orange-300',
-  COMPLETE:      'bg-slate-500/20  text-slate-400',
+  COMPLETE:      'bg-slate-700/30  text-slate-500',
 };
 
 const STATUS_LABELS = {
@@ -99,24 +99,24 @@ export default function DashboardPage({ navigate }) {
 
   // ---- Render ----
   return (
-    <div className="min-h-screen bg-slate-900 text-white">
+    <div className="min-h-screen bg-black text-slate-200">
       <div className="max-w-2xl mx-auto px-4 py-8">
 
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
-          <h1 className="text-2xl font-bold">Hotel Shenanigans</h1>
+          <h1 className="text-2xl font-display neon-text text-cyan-400">Hotel Shenanigans</h1>
           <div className="flex items-center gap-3">
             {avatarUrl && (
               <img
                 src={avatarUrl}
                 alt="Profile"
-                className="w-9 h-9 rounded-full border-2 border-slate-600"
+                className="w-9 h-9 rounded-full border-2 border-slate-700"
               />
             )}
-            <span className="text-slate-300 text-sm hidden sm:block">{displayName}</span>
+            <span className="text-slate-400 text-sm hidden sm:block">{displayName}</span>
             <button
               onClick={signOut}
-              className="text-slate-400 hover:text-white text-sm underline transition-colors"
+              className="text-slate-500 hover:text-slate-200 text-sm underline transition-colors"
             >
               Sign out
             </button>
@@ -133,9 +133,9 @@ export default function DashboardPage({ navigate }) {
         {/* Pending Invites */}
         {invites.length > 0 && (
           <section className="mb-8">
-            <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
+            <h2 className="text-lg font-display mb-3 flex items-center gap-2">
               Pending Invitations
-              <span className="bg-blue-500 text-white text-xs font-bold rounded-full px-2 py-0.5">
+              <span className="bg-cyan-500/20 text-cyan-300 text-xs font-bold rounded-full px-2 py-0.5 border border-cyan-700">
                 {invites.length}
               </span>
             </h2>
@@ -143,24 +143,24 @@ export default function DashboardPage({ navigate }) {
               {invites.map(invite => (
                 <div
                   key={invite.id}
-                  className="bg-slate-800 border border-slate-700 rounded-xl p-4 flex items-center justify-between gap-4"
+                  className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between gap-4"
                 >
                   <div>
-                    <p className="font-medium">{invite.games?.name ?? 'A game'}</p>
-                    <p className="text-slate-400 text-sm mt-0.5">
+                    <p className="font-medium text-slate-200">{invite.games?.name ?? 'A game'}</p>
+                    <p className="text-slate-500 text-sm mt-0.5">
                       Invited {new Date(invite.invited_at).toLocaleDateString()}
                     </p>
                   </div>
                   <div className="flex gap-2 flex-shrink-0">
                     <button
                       onClick={() => handleAccept(invite.id)}
-                      className="bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+                      className="bg-cyan-600 hover:bg-cyan-500 text-black text-sm font-medium px-4 py-2 rounded-lg transition-colors neon-glow-cyan"
                     >
                       Accept
                     </button>
                     <button
                       onClick={() => handleDecline(invite.id)}
-                      className="bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+                      className="bg-slate-800 hover:bg-slate-700 text-slate-400 text-sm font-medium px-4 py-2 rounded-lg transition-colors"
                     >
                       Decline
                     </button>
@@ -173,7 +173,7 @@ export default function DashboardPage({ navigate }) {
 
         {/* Create Game */}
         <section className="mb-8">
-          <h2 className="text-lg font-semibold mb-3">Create a New Game</h2>
+          <h2 className="text-lg font-display mb-3">Create a New Game</h2>
           <form onSubmit={handleCreateGame} className="flex gap-3">
             <input
               type="text"
@@ -181,12 +181,12 @@ export default function DashboardPage({ navigate }) {
               onChange={e => setNewGameName(e.target.value)}
               placeholder="Game name (e.g. Friday Night Game)"
               maxLength={60}
-              className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+              className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500 transition-colors"
             />
             <button
               type="submit"
               disabled={creating || !newGameName.trim()}
-              className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium px-5 py-2.5 rounded-lg transition-colors flex-shrink-0"
+              className="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed text-black font-medium px-5 py-2.5 rounded-lg transition-colors flex-shrink-0 neon-glow-cyan"
             >
               {creating ? 'Creating…' : 'Create'}
             </button>
@@ -195,12 +195,12 @@ export default function DashboardPage({ navigate }) {
 
         {/* My Games */}
         <section>
-          <h2 className="text-lg font-semibold mb-3">Your Games</h2>
+          <h2 className="text-lg font-display mb-3">Your Games</h2>
 
           {loadingData ? (
-            <p className="text-slate-500 text-sm">Loading…</p>
+            <p className="text-slate-600 text-sm">Loading…</p>
           ) : games.length === 0 ? (
-            <p className="text-slate-500 text-sm">
+            <p className="text-slate-600 text-sm">
               No games yet. Create one above, or accept an invitation to get started.
             </p>
           ) : (
@@ -209,7 +209,7 @@ export default function DashboardPage({ navigate }) {
                 <div key={game.id} className="flex items-center gap-2">
                   <button
                     onClick={() => game.status === 'ACTIVE' ? navigate.toGame(game.id) : navigate.toLobby(game.id)}
-                    className="flex-1 bg-slate-800 border border-slate-700 hover:border-slate-500 rounded-xl p-4 flex items-center justify-between gap-4 text-left transition-colors"
+                    className="flex-1 bg-slate-900 border border-slate-800 hover:border-slate-600 rounded-xl p-4 flex items-center justify-between gap-4 text-left transition-colors"
                   >
                     <div>
                       <p className="font-medium">{game.name}</p>

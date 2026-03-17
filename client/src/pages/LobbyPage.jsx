@@ -137,7 +137,7 @@ export default function LobbyPage({ gameId, navigate }) {
   // ---- Render ----
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
+      <div className="min-h-screen bg-black text-slate-200 flex items-center justify-center">
         <p className="text-slate-500 text-sm">Loading lobby…</p>
       </div>
     );
@@ -145,7 +145,7 @@ export default function LobbyPage({ gameId, navigate }) {
 
   if (!game) {
     return (
-      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
+      <div className="min-h-screen bg-black text-slate-200 flex items-center justify-center">
         <div className="text-center">
           <p className="text-red-400 mb-4">{error || 'Game not found'}</p>
           <button onClick={navigate.toDashboard} className="text-blue-400 underline text-sm">
@@ -157,7 +157,7 @@ export default function LobbyPage({ gameId, navigate }) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white">
+    <div className="min-h-screen bg-black text-slate-200">
       <div className="max-w-2xl mx-auto px-4 py-8">
 
         {/* Navigation */}
@@ -181,7 +181,7 @@ export default function LobbyPage({ gameId, navigate }) {
         <div className="mb-8">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-bold">{game.name}</h1>
+              <h1 className="text-2xl font-display neon-text text-cyan-400">{game.name}</h1>
               <p className="text-slate-400 text-sm mt-1">
                 {game.status === 'LOBBY' ? 'Waiting for players…' : `Status: ${game.status}`}
               </p>
@@ -201,7 +201,7 @@ export default function LobbyPage({ gameId, navigate }) {
                     onClick={handleStart}
                     disabled={!canStart || starting}
                     title={!canStart ? getStartBlockReason() : ''}
-                    className="bg-green-600 hover:bg-green-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold px-5 py-2.5 rounded-lg transition-colors"
+                    className="bg-green-600 hover:bg-green-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold px-5 py-2.5 rounded-lg transition-colors neon-glow-green"
                   >
                     {starting ? 'Starting…' : 'Start Game'}
                   </button>
@@ -217,7 +217,7 @@ export default function LobbyPage({ gameId, navigate }) {
             {game.status === 'ACTIVE' && (
               <button
                 onClick={() => navigate.toGame(gameId)}
-                className="bg-green-600 hover:bg-green-500 text-white font-semibold px-5 py-2.5 rounded-lg transition-colors flex-shrink-0"
+                className="bg-green-600 hover:bg-green-500 text-white font-semibold px-5 py-2.5 rounded-lg transition-colors flex-shrink-0 neon-glow-green"
               >
                 Enter Game →
               </button>
@@ -239,14 +239,14 @@ export default function LobbyPage({ gameId, navigate }) {
 
         {/* Confirmed Players */}
         <section className="mb-8">
-          <h2 className="text-base font-semibold text-slate-300 mb-3 uppercase tracking-wide text-xs">
+          <h2 className="text-slate-400 mb-3 uppercase tracking-widest text-[10px] font-display">
             Players ({confirmedPlayerCount})
           </h2>
           <div className="space-y-2">
             {players.map(player => (
               <div
                 key={player.id}
-                className="bg-slate-800 rounded-lg px-4 py-3 flex items-center gap-3"
+                className="bg-slate-900 border border-slate-800 rounded-lg px-4 py-3 flex items-center gap-3"
               >
                 {player.users?.avatar_url ? (
                   <img
@@ -278,14 +278,14 @@ export default function LobbyPage({ gameId, navigate }) {
         {/* Invitations */}
         {invites.length > 0 && (
           <section className="mb-8">
-            <h2 className="text-base font-semibold text-slate-300 mb-3 uppercase tracking-wide text-xs">
+            <h2 className="text-slate-400 mb-3 uppercase tracking-widest text-[10px] font-display">
               Invitations ({invites.length})
             </h2>
             <div className="space-y-2">
               {invites.map(invite => (
                 <div
                   key={invite.id}
-                  className="bg-slate-800 rounded-lg px-4 py-3 flex items-center justify-between gap-3"
+                  className="bg-slate-900 border border-slate-800 rounded-lg px-4 py-3 flex items-center justify-between gap-3"
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="w-8 h-8 rounded-full bg-slate-600 flex items-center justify-center text-xs font-bold flex-shrink-0">
@@ -319,7 +319,7 @@ export default function LobbyPage({ gameId, navigate }) {
         {/* Invite Form — host only, game still in LOBBY */}
         {isHost && game.status === 'LOBBY' && (
           <section>
-            <h2 className="text-base font-semibold text-slate-300 mb-3 uppercase tracking-wide text-xs">
+            <h2 className="text-slate-400 mb-3 uppercase tracking-widest text-[10px] font-display">
               Invite a Player
             </h2>
             <form onSubmit={handleInvite} className="flex gap-3">
@@ -328,12 +328,12 @@ export default function LobbyPage({ gameId, navigate }) {
                 value={inviteEmail}
                 onChange={e => setInviteEmail(e.target.value)}
                 placeholder="friend@example.com"
-                className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500 transition-colors"
               />
               <button
                 type="submit"
                 disabled={inviting || !inviteEmail.trim()}
-                className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium px-5 py-2.5 rounded-lg transition-colors flex-shrink-0"
+                className="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed text-black font-medium px-5 py-2.5 rounded-lg transition-colors flex-shrink-0 neon-glow-cyan"
               >
                 {inviting ? 'Sending…' : 'Send Invite'}
               </button>
