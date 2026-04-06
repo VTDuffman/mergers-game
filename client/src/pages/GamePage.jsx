@@ -294,8 +294,14 @@ export default function GamePage({ gameId, navigate }) {
     setDrawPileCount(data.drawPileCount);
     setPollError('');
     setTileError('');
-    setMergerSell(0);
-    setMergerTrade(0);
+    // Only reset merger inputs when we are leaving the decision phase, not on every
+    // background poll — otherwise the 3-second poll wipes the player's sell/trade
+    // values while they're still thinking.
+    const inDecision = data.publicState?.turnPhase === 'MERGER_DECISIONS';
+    if (!inDecision) {
+      setMergerSell(0);
+      setMergerTrade(0);
+    }
   }
 
   // ---- Polling ----
