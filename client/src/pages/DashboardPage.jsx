@@ -208,7 +208,17 @@ export default function DashboardPage({ navigate }) {
               {games.map(game => (
                 <div key={game.id} className="flex items-center gap-2">
                   <button
-                    onClick={() => game.status === 'ACTIVE' ? navigate.toGame(game.id) : navigate.toLobby(game.id)}
+                    onClick={() => {
+                      // Route to game board for any in-progress status (ACTIVE or MERGER_PAUSE).
+                      // MERGER_PAUSE means a merger is underway — players must reach the board
+                      // to make their sell/trade/keep decisions, not the lobby.
+                      // COMPLETE routes to the board so players can see the final score screen.
+                      if (game.status === 'ACTIVE' || game.status === 'MERGER_PAUSE' || game.status === 'COMPLETE') {
+                        navigate.toGame(game.id);
+                      } else {
+                        navigate.toLobby(game.id);
+                      }
+                    }}
                     className="flex-1 bg-slate-900 border border-slate-800 hover:border-slate-600 rounded-xl p-4 flex items-center justify-between gap-4 text-left transition-colors"
                   >
                     <div>

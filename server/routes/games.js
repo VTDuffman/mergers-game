@@ -657,15 +657,25 @@ router.post('/:gameId/play-tile', async (req, res) => {
     ].slice(0, 50);
 
     if (phase === 'BUY_STOCKS') {
-      // No defunct stockholders needed decisions — jump straight to buying
+      // No defunct stockholders needed decisions — jump straight to buying.
+      // Game status stays ACTIVE; no DB update needed here.
       state.turnPhase = 'BUY_STOCKS';
       const { canEnd, reason } = checkEndGameConditions(state);
       state.endGameAvailable = canEnd;
       state.endGameReason    = reason ?? null;
     } else {
-      // At least one player must decide what to do with defunct shares
+      // At least one player must decide what to do with defunct shares.
+      // Mark game MERGER_PAUSE so buy-stocks / end-turn are correctly blocked
+      // until all decisions are submitted and the merger fully resolves.
       state.turnPhase = 'MERGER_DECISIONS';
-      await supabase.from('games').update({ status: 'MERGER_PAUSE' }).eq('id', gameId);
+      const { error: statusError } = await supabase
+        .from('games')
+        .update({ status: 'MERGER_PAUSE' })
+        .eq('id', gameId);
+      if (statusError) {
+        console.error('[play-tile] Failed to set game status to MERGER_PAUSE:', statusError.message);
+        return res.status(500).json({ error: 'Merger triggered but failed to update game status. Please retry.' });
+      }
     }
 
     const saved = await saveState(gameId, state, playerTiles);
@@ -762,13 +772,21 @@ router.post('/:gameId/choose-survivor', async (req, res) => {
   ].slice(0, 50);
 
   if (phase === 'BUY_STOCKS') {
+    // No one held shares in the defunct chain — merger resolved instantly.
     state.turnPhase = 'BUY_STOCKS';
     const { canEnd, reason } = checkEndGameConditions(state);
     state.endGameAvailable = canEnd;
     state.endGameReason    = reason ?? null;
   } else {
     state.turnPhase = 'MERGER_DECISIONS';
-    await supabase.from('games').update({ status: 'MERGER_PAUSE' }).eq('id', gameId);
+    const { error: statusError } = await supabase
+      .from('games')
+      .update({ status: 'MERGER_PAUSE' })
+      .eq('id', gameId);
+    if (statusError) {
+      console.error('[choose-survivor] Failed to set game status to MERGER_PAUSE:', statusError.message);
+      return res.status(500).json({ error: 'Survivor chosen but failed to update game status. Please retry.' });
+    }
   }
 
   const saved = await saveState(gameId, state, playerTiles);
@@ -836,7 +854,19 @@ router.post('/:gameId/merger-decision', async (req, res) => {
       const { canEnd, reason } = checkEndGameConditions(state);
       state.endGameAvailable = canEnd;
       state.endGameReason    = reason ?? null;
-      await supabase.from('games').update({ status: 'ACTIVE' }).eq('id', gameId);
+      // Restore game status to ACTIVE so the buy-stocks and end-turn routes
+      // (which gate on status === 'ACTIVE') will accept the active player's requests.
+      // Check the result: if this fails the state save below is skipped, keeping
+      // the DB consistent (still MERGER_DECISIONS / MERGER_PAUSE) so the player
+      // can retry rather than landing in a split-brain state.
+      const { error: statusError } = await supabase
+        .from('games')
+        .update({ status: 'ACTIVE' })
+        .eq('id', gameId);
+      if (statusError) {
+        console.error('[merger-decision] Failed to restore game status to ACTIVE:', statusError.message);
+        return res.status(500).json({ error: 'Merger resolved but failed to update game status. Please retry.' });
+      }
     } else {
       state.turnPhase = 'MERGER_DECISIONS'; // another defunct chain to resolve
     }

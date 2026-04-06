@@ -214,12 +214,12 @@ export default function LobbyPage({ gameId, navigate }) {
               </div>
             )}
 
-            {game.status === 'ACTIVE' && (
+            {(game.status === 'ACTIVE' || game.status === 'MERGER_PAUSE') && (
               <button
                 onClick={() => navigate.toGame(gameId)}
                 className="bg-green-600 hover:bg-green-500 text-white font-semibold px-5 py-2.5 rounded-lg transition-colors flex-shrink-0 neon-glow-green"
               >
-                Enter Game →
+                {game.status === 'MERGER_PAUSE' ? 'Merger in Progress →' : 'Enter Game →'}
               </button>
             )}
           </div>
