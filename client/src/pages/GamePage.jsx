@@ -142,6 +142,20 @@ export default function GamePage({ gameId, navigate }) {
   // ---- Stock buying ----
   const [stocksToBuy, setStocksToBuy] = useState({});
 
+  // ---- Mobile sidebar toggle ----
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [mobileSidebarTab,  setMobileSidebarTab]  = useState('chains'); // 'chains' | 'standings'
+
+  // Tap active tab → close; tap inactive tab → switch; tap closed → open
+  function handleMobileTab(tab) {
+    if (mobileSidebarOpen && mobileSidebarTab === tab) {
+      setMobileSidebarOpen(false);
+    } else {
+      setMobileSidebarTab(tab);
+      setMobileSidebarOpen(true);
+    }
+  }
+
   // ---- Loading / action flags ----
   const [placing,            setPlacing]            = useState(false);
   const [ending,             setEnding]             = useState(false);
@@ -153,6 +167,7 @@ export default function GamePage({ gameId, navigate }) {
   const [actionError,        setActionError]        = useState('');
 
   const pollingRef = useRef(null);
+  const logRef     = useRef(null);  // bottom-anchor for the game log auto-scroll
 
   // ── Animation refs ──
   // Track the previous board to detect newly-placed tiles (for tile-drop spring)
@@ -184,11 +199,27 @@ export default function GamePage({ gameId, navigate }) {
     }
   }, [gameId]);
 
+  // Derive poll interval from current game phase:
+  //   3 s — merger phases (players are actively waiting for their turn prompt)
+  //   4 s — normal active play
+  //  10 s — game over or not yet loaded (no urgency)
+  const isMergerActive = publicState?.turnPhase === 'MERGER_DECISIONS' || publicState?.turnPhase === 'CHOOSE_SURVIVOR';
+  const pollInterval = publicState?.isGameOver
+    ? 10_000
+    : isMergerActive ? 3_000 : publicState ? 4_000 : 10_000;
+
   useEffect(() => {
     fetchState();
-    pollingRef.current = setInterval(fetchState, 10_000);
+    pollingRef.current = setInterval(fetchState, pollInterval);
     return () => clearInterval(pollingRef.current);
-  }, [fetchState]);
+  }, [fetchState, pollInterval]);
+
+  // Auto-scroll the game log to the bottom whenever a new entry arrives
+  useEffect(() => {
+    if (logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [publicState?.log?.length]);
 
   // ---- Auto-show the survivor modal when polling reveals CHOOSE_SURVIVOR ----
   useEffect(() => {
@@ -689,24 +720,82 @@ export default function GamePage({ gameId, navigate }) {
             </div>
           </div>
 
-          {/* Recent move log */}
+          {/* Game log — scrollable, auto-scrolls to latest entry */}
           {publicState.log?.length > 0 && (
             <div className="w-full max-w-4xl mx-auto mt-4 px-1">
-              <p className="text-[10px] text-slate-600 uppercase tracking-wider mb-1">Recent moves</p>
-              <ul className="space-y-0.5">
-                {publicState.log.slice(0, 6).map((entry, i) => (
-                  <li key={i} className="text-[11px] text-slate-500">{entry.message}</li>
+              <p className="text-[10px] text-slate-600 uppercase tracking-wider mb-1">Game Log</p>
+              <div
+                ref={logRef}
+                className="max-h-36 overflow-y-auto space-y-0.5 pr-1"
+              >
+                {publicState.log.map((entry, i) => (
+                  <p key={i} className="text-[11px] text-slate-500">{entry.message}</p>
                 ))}
-              </ul>
+              </div>
             </div>
           )}
+
+          {/* Mobile-only info toggle — hidden on lg+ where the sidebar is always visible */}
+          <div className="lg:hidden w-full max-w-4xl mx-auto mt-3 flex gap-2">
+            <button
+              onClick={() => handleMobileTab('chains')}
+              className={`flex-1 py-1.5 text-xs border rounded-lg transition-colors
+                ${mobileSidebarOpen && mobileSidebarTab === 'chains'
+                  ? 'border-cyan-700 text-cyan-400 bg-cyan-900/20'
+                  : 'border-slate-800 text-slate-500 hover:border-slate-700 hover:text-slate-300'}`}
+            >
+              {mobileSidebarOpen && mobileSidebarTab === 'chains' ? '▲ Chains' : '▼ Chains'}
+            </button>
+            <button
+              onClick={() => handleMobileTab('standings')}
+              className={`flex-1 py-1.5 text-xs border rounded-lg transition-colors
+                ${mobileSidebarOpen && mobileSidebarTab === 'standings'
+                  ? 'border-cyan-700 text-cyan-400 bg-cyan-900/20'
+                  : 'border-slate-800 text-slate-500 hover:border-slate-700 hover:text-slate-300'}`}
+            >
+              {mobileSidebarOpen && mobileSidebarTab === 'standings' ? '▲ Standings' : '▼ Standings'}
+            </button>
+          </div>
         </main>
 
         {/* ── Sidebar ── */}
-        <aside className="lg:w-72 xl:w-80 border-t lg:border-t-0 lg:border-l border-slate-800 overflow-y-auto flex-shrink-0">
+        {/* Mobile: hidden by default, toggled via the Chains/Standings buttons above the footer */}
+        {/* Desktop (lg+): always visible as a fixed-width side panel */}
+        <aside className={`lg:w-72 xl:w-80 border-t lg:border-t-0 lg:border-l border-slate-800 overflow-y-auto flex-shrink-0
+          ${mobileSidebarOpen ? 'block' : 'hidden'} lg:block`}>
+
+          {/* Mobile-only tab bar — lets the player switch between Chains and Standings */}
+          <div className="flex lg:hidden border-b border-slate-800">
+            <button
+              onClick={() => setMobileSidebarTab('chains')}
+              className={`flex-1 py-2 text-xs font-medium uppercase tracking-wider transition-colors
+                ${mobileSidebarTab === 'chains'
+                  ? 'text-cyan-400 border-b-2 border-cyan-400'
+                  : 'text-slate-500 hover:text-slate-300'}`}
+            >
+              Chains
+            </button>
+            <button
+              onClick={() => setMobileSidebarTab('standings')}
+              className={`flex-1 py-2 text-xs font-medium uppercase tracking-wider transition-colors
+                ${mobileSidebarTab === 'standings'
+                  ? 'text-cyan-400 border-b-2 border-cyan-400'
+                  : 'text-slate-500 hover:text-slate-300'}`}
+            >
+              Standings
+            </button>
+            <button
+              onClick={() => setMobileSidebarOpen(false)}
+              className="px-3 text-slate-500 hover:text-white text-sm"
+              title="Close"
+            >
+              ✕
+            </button>
+          </div>
 
           {/* Hotel chain table */}
-          <section className="p-3 border-b border-slate-800">
+          {/* On mobile: only shown when Chains tab is active */}
+          <section className={`p-3 border-b border-slate-800 ${mobileSidebarTab !== 'chains' ? 'hidden lg:block' : ''}`}>
             <h2 className="text-[10px] uppercase tracking-widest text-slate-500 font-display mb-2">
               Hotel Chains
             </h2>
@@ -835,7 +924,8 @@ export default function GamePage({ gameId, navigate }) {
           </section>
 
           {/* Player standings */}
-          <section className="p-3">
+          {/* On mobile: only shown when Standings tab is active */}
+          <section className={`p-3 ${mobileSidebarTab !== 'standings' ? 'hidden lg:block' : ''}`}>
             <h2 className="text-[10px] uppercase tracking-widest text-slate-500 font-display mb-2">
               Standings
             </h2>
@@ -978,8 +1068,8 @@ export default function GamePage({ gameId, navigate }) {
             <>
               {/* ── Tile hand (PLACE_TILE phase or spectating) ── */}
               {(isPlacePhase || !isMyTurn) && (
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-slate-500 text-xs uppercase tracking-wider flex-shrink-0">
+                <div className="flex flex-col gap-2">
+                  <span className="text-slate-500 text-xs uppercase tracking-wider">
                     {isMyTurn && isPlacePhase ? 'Your turn — place a tile:' : 'Your tiles:'}
                   </span>
 
@@ -987,6 +1077,8 @@ export default function GamePage({ gameId, navigate }) {
                     <span className="text-slate-600 text-sm italic">No tiles in hand</span>
                   )}
 
+                  {/* 3-column grid on mobile → flex row on sm+ screens */}
+                  <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap">
                   {myTiles.map(tileId => {
                     const cls       = tileClassifications[tileId];
                     const canPlace  = isMyTurn && isPlacePhase && !placing && cls !== 'illegal';
@@ -1019,6 +1111,7 @@ export default function GamePage({ gameId, navigate }) {
                       </button>
                     );
                   })}
+                  </div>{/* end grid/flex tile row */}
                 </div>
               )}
 
