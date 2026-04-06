@@ -51,10 +51,17 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'Game name is required' });
   }
 
+  // Strip HTML injection characters and enforce a 60-character hard cap.
+  // The client enforces maxLength={60} too, but API callers can bypass that.
+  const sanitizedName = name.trim().replace(/[<>&"]/g, '').slice(0, 60);
+  if (!sanitizedName) {
+    return res.status(400).json({ error: 'Game name must contain at least one valid character.' });
+  }
+
   // Insert the game record
   const { data: game, error: gameError } = await supabase
     .from('games')
-    .insert({ host_id: req.user.id, name: name.trim() })
+    .insert({ host_id: req.user.id, name: sanitizedName })
     .select()
     .single();
 

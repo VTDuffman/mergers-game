@@ -3,8 +3,8 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { api } from '../lib/api.js';
 
 // How often to poll for lobby updates (ms).
-// Keeps the host's player list and invite statuses in sync automatically.
-const POLL_INTERVAL_MS = 10_000;
+// Lobby changes are human-speed events (joining, accepting an invite) so 30 s is sufficient.
+const POLL_INTERVAL_MS = 30_000;
 
 // Status badge styling for each invite status
 const INVITE_STATUS_STYLES = {

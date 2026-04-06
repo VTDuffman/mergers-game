@@ -1,3 +1,7 @@
+// NOT IN USE — legacy Socket.io handler from the pre-Supabase architecture.
+// All game actions now flow through server/routes/games.js (REST + polling).
+// Safe to delete once the Socket.io infrastructure is fully removed.
+
 import { getRoom } from '../rooms/roomManager.js';
 import { getPublicGameState, checkEndGameConditions, resetGameState } from '../game/GameState.js';
 import { classifyPlacement, isLegalPlacement, findUnplayableTiles, getAdjacentChains } from '../game/boardLogic.js';

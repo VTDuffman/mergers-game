@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
-import { motion, AnimatePresence, useMotionValue, animate, useMotionValueEvent } from 'framer-motion';
+import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from 'react';
+import { motion, AnimatePresence, animate } from 'framer-motion';
 import { useAuth } from '../context/AuthContext.jsx';
 import { api } from '../lib/api.js';
 import BoardCell, { CHAIN_COLORS } from '../components/Game/Board/BoardCell.jsx';
@@ -8,6 +8,13 @@ import { CHAIN_ORDER, CHAIN_LABELS, getStockPrice, formatDollars } from '../util
 // ---- Board geometry ----
 const COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'];
 const ROWS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+// ---- Chain tier labels for the founding modal ----
+const CHAIN_TIER_LABEL = {
+  tower: 'Budget',  luxor: 'Budget',
+  american: 'Mid',  worldwide: 'Mid',  festival: 'Mid',
+  imperial: 'Premium',  continental: 'Premium',
+};
 
 // ---- Client-side tile classification ----
 // Mirrors server/game/boardLogic.js — used for UX highlighting only.
@@ -107,23 +114,87 @@ function playTurnChime() {
   } catch (_) { /* browsers may block AudioContext before a user gesture */ }
 }
 
+// Plays a two-note descending "cha-ching" coin sound.
+// loud=true for majority bonus (higher gain), false for minority.
+function playChaChingSound(loud) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const vol = loud ? 0.28 : 0.13;
+    [[880, 0], [660, 0.13]].forEach(([freq, delay]) => {
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      const t = ctx.currentTime + delay;
+      gain.gain.setValueAtTime(vol, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+      osc.start(t);
+      osc.stop(t + 0.22);
+    });
+  } catch (_) {}
+}
+
+// Plays a soft ascending "price up" blip when a chain crosses a price tier boundary.
+function playPriceUpSound() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [440, 554].forEach((freq, i) => {
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const t = ctx.currentTime + i * 0.1;
+      gain.gain.setValueAtTime(0.12, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+      osc.start(t);
+      osc.stop(t + 0.18);
+    });
+  } catch (_) {}
+}
+
+// Plays a short percussive click when a new tile arrives in your hand.
+function playTileDrawSound() {
+  try {
+    const ctx  = new (window.AudioContext || window.webkitAudioContext)();
+    const osc  = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'square';
+    osc.frequency.value = 200;
+    gain.gain.setValueAtTime(0.09, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.07);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.07);
+  } catch (_) {}
+}
+
 // ============================================================
 // AnimatedDollar
 // Smoothly counts a dollar value up or down whenever it changes.
 // Uses framer-motion's animate() to drive a local display state.
 // ============================================================
 function AnimatedDollar({ value, className }) {
-  const mv      = useMotionValue(value);
-  const [display, setDisplay] = useState(value);
+  // displayRef tracks the number currently shown on screen so that if a new
+  // target arrives mid-animation we always start from the *visible* value,
+  // never from an intermediate motion-value position that React hasn't painted yet.
+  const displayRef = useRef(value);
+  const [display,  setDisplay] = useState(value);
 
-  // Subscribe to the motion value and update display state on each frame
-  useMotionValueEvent(mv, 'change', (latest) => setDisplay(Math.round(latest)));
-
-  // Whenever the target value changes, animate the motion value to it
   useEffect(() => {
-    const controls = animate(mv, value, {
+    const from = displayRef.current;
+    const controls = animate(from, value, {
       duration: 0.55,
       ease: [0.16, 1, 0.3, 1], // expo out — fast start, smooth finish
+      onUpdate(latest) {
+        const rounded = Math.round(latest);
+        displayRef.current = rounded;
+        setDisplay(rounded);
+      },
     });
     return controls.stop;
   }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -185,10 +256,13 @@ export default function GamePage({ gameId, navigate }) {
   const [retiring,           setRetiring]           = useState(false);
   const [restarting,         setRestarting]         = useState(false);
   const [actionError,        setActionError]        = useState('');
+  const [tileError,          setTileError]          = useState('');
   const [logHasNew,          setLogHasNew]          = useState(false);
   const [shakingTile,        setShakingTile]        = useState(null);
 
-  const pollingRef = useRef(null);
+  const pollingRef      = useRef(null);
+  const pollFailRef     = useRef(0);   // consecutive failed poll counter
+  const [connectionLost, setConnectionLost] = useState(false);
   const logRef     = useRef(null);  // bottom-anchor for the game log auto-scroll
 
   // ── Animation refs ──
@@ -199,6 +273,19 @@ export default function GamePage({ gameId, navigate }) {
   // Track previous shareholder ranks to detect new majority holders (for takeover flash)
   const prevRanksRef = useRef({});
   const [flashKeys,  setFlashKeys]  = useState(new Set());
+  // Track which chains were active to detect newly-founded chains (for founding glow burst)
+  const prevChainsActiveRef  = useRef({});   // { chainName: boolean }
+  const [foundingGlowMap, setFoundingGlowMap] = useState({}); // { tileId: chainName }
+  // Track the board separately for merger absorption sweep (needs its own snapshot)
+  const prevBoardForAbsorptionRef = useRef(null);
+  const [absorptionDelays, setAbsorptionDelays] = useState({}); // { tileId: delayMs }
+  // Track log top timestamp to detect new bonus entries (for cha-ching sound)
+  const prevLogTopTimeRef = useRef(null);
+  // Track chain sizes to detect price-tier crossings (for price-up sound + flash)
+  const prevChainSizesRef = useRef({});
+  const [priceFlashChains, setPriceFlashChains] = useState(new Set());
+  // Track tile count to detect new draws (for tile-draw sound)
+  const prevTileCountRef = useRef(0);
 
   // ---- Apply any server response to local state ----
   function applyServerResponse(data) {
@@ -206,6 +293,7 @@ export default function GamePage({ gameId, navigate }) {
     setMyTiles(data.myTiles);
     setDrawPileCount(data.drawPileCount);
     setPollError('');
+    setTileError('');
     setMergerSell(0);
     setMergerTrade(0);
   }
@@ -214,9 +302,13 @@ export default function GamePage({ gameId, navigate }) {
   const fetchState = useCallback(async () => {
     try {
       const data = await api.getGameState(gameId);
+      pollFailRef.current = 0;
+      setConnectionLost(false);
       applyServerResponse(data);
     } catch (err) {
+      pollFailRef.current += 1;
       setPollError(err.message);
+      if (pollFailRef.current >= 5) setConnectionLost(true);
     } finally {
       setLoading(false);
     }
@@ -284,6 +376,88 @@ export default function GamePage({ gameId, navigate }) {
     return () => clearTimeout(timer);
   }, [publicState?.board]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Effect: detect chain founding for the glow-burst animation ──
+  // Fires when a chain transitions from inactive → active (isActive: false → true).
+  // Collects all board tiles belonging to the newly-founded chain and highlights them
+  // with a brightness burst + scale pop for 800 ms via Framer Motion.
+  useEffect(() => {
+    const chains = publicState?.chains;
+    const board  = publicState?.board;
+    if (!chains || !board) return;
+
+    // First load: populate the ref without triggering an animation.
+    if (Object.keys(prevChainsActiveRef.current).length === 0) {
+      for (const name of CHAIN_ORDER) {
+        prevChainsActiveRef.current[name] = chains[name]?.isActive ?? false;
+      }
+      return;
+    }
+
+    // Detect any chain that just became active this poll.
+    const newlyFounded = CHAIN_ORDER.filter(
+      name => chains[name]?.isActive && !prevChainsActiveRef.current[name]
+    );
+
+    // Update the ref for next comparison.
+    for (const name of CHAIN_ORDER) {
+      prevChainsActiveRef.current[name] = chains[name]?.isActive ?? false;
+    }
+
+    if (newlyFounded.length === 0) return;
+
+    // Build a map of every tile belonging to a newly-founded chain.
+    const glowMap = {};
+    for (const [tileId, state] of Object.entries(board)) {
+      if (newlyFounded.includes(state)) glowMap[tileId] = state;
+    }
+    if (Object.keys(glowMap).length === 0) return;
+
+    setFoundingGlowMap(glowMap);
+    const timer = setTimeout(() => setFoundingGlowMap({}), 800);
+    return () => clearTimeout(timer);
+  }, [publicState?.chains, publicState?.board]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Effect: merger absorption sweep ──
+  // Fires when a board cell transitions from one chain name to another (defunct → survivor).
+  // Tiles are staggered 60 ms apart in left-to-right, top-to-bottom order so the color
+  // change ripples across the board rather than snapping all at once.
+  useEffect(() => {
+    const board = publicState?.board;
+    if (!board) { prevBoardForAbsorptionRef.current = null; return; }
+
+    if (prevBoardForAbsorptionRef.current) {
+      const chainSet = new Set(CHAIN_ORDER);
+
+      // Collect tiles that changed from one chain to a different chain.
+      const changed = Object.keys(board).filter(id => {
+        const prev = prevBoardForAbsorptionRef.current[id];
+        const curr = board[id];
+        return chainSet.has(prev) && chainSet.has(curr) && prev !== curr;
+      });
+
+      if (changed.length > 0) {
+        // Sort left-to-right (A→L), top-to-bottom (1→9) for a natural sweep direction.
+        changed.sort((a, b) => {
+          const aCol = COLS.indexOf(a[0]), bCol = COLS.indexOf(b[0]);
+          const aRow = parseInt(a.slice(1)),  bRow = parseInt(b.slice(1));
+          return aCol !== bCol ? aCol - bCol : aRow - bRow;
+        });
+
+        const delays = {};
+        changed.forEach((id, i) => { delays[id] = i * 60; });
+        setAbsorptionDelays(delays);
+
+        // Clear after every tile has finished: last delay + 400 ms for the flash itself.
+        const totalMs = (changed.length - 1) * 60 + 400;
+        const timer = setTimeout(() => setAbsorptionDelays({}), totalMs);
+        prevBoardForAbsorptionRef.current = board;
+        return () => clearTimeout(timer);
+      }
+    }
+
+    prevBoardForAbsorptionRef.current = board;
+  }, [publicState?.board]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Effect: detect when a player becomes the new sole majority holder ──
   useEffect(() => {
     if (!publicState?.players) return;
@@ -307,8 +481,90 @@ export default function GamePage({ gameId, navigate }) {
     return () => clearTimeout(timer);
   }, [publicState]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Effect: cha-ching sound on merger bonus payout ──
+  // The log is prepended (newest entry first) and capped at 50–100 entries, so comparing
+  // log.length is unreliable when the log is full. Instead, track the timestamp of the
+  // top entry — anything above that timestamp on the next poll is new.
+  useEffect(() => {
+    const log = publicState?.log;
+    if (!log?.length || !user) return;
+
+    // First load — just record the current top timestamp, no sound.
+    if (prevLogTopTimeRef.current === null) {
+      prevLogTopTimeRef.current = log[0].time;
+      return;
+    }
+
+    // Collect entries newer than the last known top.
+    const newEntries = [];
+    for (const entry of log) {
+      if (entry.time === prevLogTopTimeRef.current) break;
+      newEntries.push(entry);
+    }
+    prevLogTopTimeRef.current = log[0].time;
+
+    if (newEntries.length === 0) return;
+
+    const myName = publicState?.players?.find(p => p.id === user.id)?.name;
+    if (!myName) return;
+
+    for (const entry of newEntries) {
+      if (!entry.message.includes(myName) || !entry.message.includes('earns')) continue;
+      // "majority+minority" and "majority" both include the word "majority" → loud
+      const isLoud = entry.message.includes('majority');
+      playChaChingSound(isLoud);
+      break; // one sound per poll batch is enough
+    }
+  }, [publicState?.log]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Effect: price-up sound + flash when a chain crosses a price-tier boundary ──
+  useEffect(() => {
+    const chains = publicState?.chains;
+    if (!chains) return;
+
+    // First load — record baseline sizes, no sound.
+    if (Object.keys(prevChainSizesRef.current).length === 0) {
+      for (const name of CHAIN_ORDER) {
+        prevChainSizesRef.current[name] = chains[name]?.size ?? 0;
+      }
+      return;
+    }
+
+    const flashing = [];
+    for (const name of CHAIN_ORDER) {
+      const curr = chains[name]?.size ?? 0;
+      const prev = prevChainSizesRef.current[name] ?? 0;
+      if (curr !== prev && curr >= 2) {
+        // Reuse the existing getStockPrice function — a price change means a tier was crossed.
+        if (getStockPrice(name, curr) !== getStockPrice(name, prev)) {
+          flashing.push(name);
+        }
+      }
+      prevChainSizesRef.current[name] = curr;
+    }
+
+    if (flashing.length === 0) return;
+    if (flashing.length > 0) playPriceUpSound();
+    setPriceFlashChains(new Set(flashing));
+    const timer = setTimeout(() => setPriceFlashChains(new Set()), 1200);
+    return () => clearTimeout(timer);
+  }, [publicState?.chains]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Effect: tile-draw sound when a new tile arrives in hand ──
+  useEffect(() => {
+    const count = myTiles.length;
+    // Only play when the count increases; skip the initial population (0 → 6 on load).
+    if (prevTileCountRef.current > 0 && count > prevTileCountRef.current) {
+      playTileDrawSound();
+    }
+    prevTileCountRef.current = count;
+  }, [myTiles.length]);
+
   // ---- Derived values ----
-  const activePlayer      = publicState?.players?.[publicState.activePlayerIndex];
+  // Guard against stale polls briefly showing a retired player as the active one.
+  // The server skips retired players correctly; this is purely a display safety net.
+  const activePlayerRaw   = publicState?.players?.[publicState.activePlayerIndex];
+  const activePlayer      = activePlayerRaw?.isRetired ? null : activePlayerRaw;
   const isMyTurn          = activePlayer?.id === user?.id;
   const isPlacePhase      = publicState?.turnPhase === 'PLACE_TILE';
   const isBuyPhase        = publicState?.turnPhase === 'BUY_STOCKS';
@@ -337,13 +593,18 @@ export default function GamePage({ gameId, navigate }) {
   // Computed keep value for merger decision
   const mergerKeep = myDefunctShares - mergerSell - mergerTrade;
 
-  // Pre-classify every tile in hand for highlighting
-  const tileClassifications = {};
-  if (publicState?.board) {
-    for (const tile of myTiles) {
-      tileClassifications[tile] = classifyTile(publicState.board, publicState.chains, tile);
+  // Pre-classify every tile in hand for highlighting.
+  // useMemo ensures this only reruns when the board, chains, or hand actually change —
+  // not on every re-render triggered by local state (inputs, sidebar toggles, etc.).
+  const tileClassifications = useMemo(() => {
+    const result = {};
+    if (publicState?.board) {
+      for (const tile of myTiles) {
+        result[tile] = classifyTile(publicState.board, publicState.chains, tile);
+      }
     }
-  }
+    return result;
+  }, [publicState?.board, publicState?.chains, myTiles]);
 
   const totalStocksToBuy = Object.values(stocksToBuy).reduce((s, q) => s + q, 0);
 
@@ -370,6 +631,7 @@ export default function GamePage({ gameId, navigate }) {
 
   async function handleTileClick(tileId) {
     if (!isMyTurn || !isPlacePhase || placing) return;
+    setTileError('');
     const cls = tileClassifications[tileId];
     if (!cls || cls === 'illegal') {
       if (isMyTurn && isPlacePhase) {
@@ -428,6 +690,7 @@ export default function GamePage({ gameId, navigate }) {
   async function submitPlayTile(tilePlaced, { chainFounded = null, survivorChain: sc = null } = {}) {
     setPlacing(true);
     setActionError('');
+    setTileError('');
     try {
       const body = { tilePlaced };
       if (chainFounded) body.chainFounded = chainFounded;
@@ -447,7 +710,9 @@ export default function GamePage({ gameId, navigate }) {
       applyServerResponse(data);
       setStocksToBuy({});
     } catch (err) {
-      setActionError(err.message);
+      // Tile errors get their own prominent display above the hand,
+      // separate from the generic action error banner.
+      setTileError(err.message);
     } finally {
       setPlacing(false);
     }
@@ -571,6 +836,33 @@ export default function GamePage({ gameId, navigate }) {
     return (
       <div className="min-h-screen bg-black text-slate-200 flex items-center justify-center">
         <p className="text-slate-500 text-sm">Loading game…</p>
+      </div>
+    );
+  }
+
+  if (connectionLost) {
+    return (
+      <div className="min-h-screen bg-black text-slate-200 flex items-center justify-center p-6">
+        <div className="text-center max-w-xs">
+          <p className="text-3xl mb-3">⚠</p>
+          <p className="text-red-400 font-semibold text-lg mb-1">Connection lost</p>
+          <p className="text-slate-500 text-sm mb-6">
+            Could not reach the server after several attempts. Your game is saved — refresh to reconnect.
+          </p>
+          <button
+            onClick={() => {
+              pollFailRef.current = 0;
+              setConnectionLost(false);
+              fetchState();
+            }}
+            className="w-full bg-cyan-700 hover:bg-cyan-600 text-white font-bold py-3 rounded-xl transition-colors mb-3 neon-glow-cyan"
+          >
+            Refresh
+          </button>
+          <button onClick={navigate.toDashboard} className="text-slate-500 hover:text-slate-300 text-sm underline transition-colors">
+            ← Back to dashboard
+          </button>
+        </div>
       </div>
     );
   }
@@ -747,17 +1039,40 @@ export default function GamePage({ gameId, navigate }) {
                   const clickable = isMyTurn && isPlacePhase && !placing
                     && inHand && cls !== 'illegal';
 
-                  const isNew     = justPlacedTiles.has(tileId);
-                  const isShaking = shakingTile === tileId;
+                  const isNew          = justPlacedTiles.has(tileId);
+                  const isShaking      = shakingTile === tileId;
+                  const isFoundingGlow = tileId in foundingGlowMap;
+                  const absorptionDelay = absorptionDelays[tileId]; // undefined = not absorbing
+                  const isAbsorbing    = absorptionDelay !== undefined;
                   return (
-                    // motion.div is the grid item; scale animation is purely visual (no layout shift)
+                    // motion.div is the grid item; scale/filter animations are purely visual (no layout shift)
                     <motion.div
                       key={tileId}
-                      animate={isShaking ? { x: [0, -5, 5, -5, 5, 0] } : isNew ? { scale: [1.45, 1] } : {}}
-                      transition={isShaking
-                        ? { duration: 0.35, ease: 'easeInOut' }
-                        : { type: 'spring', stiffness: 380, damping: 14 }}
-                      style={{ zIndex: isNew ? 10 : undefined, position: 'relative' }}
+                      animate={
+                        isShaking
+                          ? { x: [0, -5, 5, -5, 5, 0] }
+                          : isFoundingGlow
+                            // Brightness burst + scale pop — keyframe ends at natural values so
+                            // clearing foundingGlowMap after 800 ms causes no visible jump.
+                            ? { scale: [1, 1.35, 1.1, 1], filter: ['brightness(1)', 'brightness(2.8)', 'brightness(1.5)', 'brightness(1)'] }
+                            : isAbsorbing
+                              // White flash — tile already shows the survivor colour underneath,
+                              // so this creates a "burns in" effect as it fades back to normal.
+                              ? { filter: ['brightness(1)', 'brightness(5)', 'brightness(1)'] }
+                              : isNew
+                                ? { scale: [1.45, 1] }
+                                : {}
+                      }
+                      transition={
+                        isShaking
+                          ? { duration: 0.35, ease: 'easeInOut' }
+                          : isFoundingGlow
+                            ? { duration: 0.8, ease: 'easeOut', times: [0, 0.2, 0.55, 1] }
+                            : isAbsorbing
+                              ? { duration: 0.38, ease: 'easeOut', times: [0, 0.25, 1], delay: absorptionDelay / 1000 }
+                              : { type: 'spring', stiffness: 380, damping: 14 }
+                      }
+                      style={{ zIndex: isNew || isFoundingGlow ? 20 : undefined, position: 'relative' }}
                     >
                       <BoardCell
                         tileId={tileId}
@@ -925,11 +1240,20 @@ export default function GamePage({ gameId, navigate }) {
                         <td className={`pt-2 pb-1 text-right tabular-nums font-medium ${chain.isSafe ? 'text-red-400' : 'text-slate-300'}`}>
                           {chain.size}
                         </td>
-                        <td className="pt-2 pb-1 text-right tabular-nums text-slate-300">
+                        <td className={`pt-2 pb-1 text-right tabular-nums transition-colors duration-300 ${
+                          priceFlashChains.has(name)
+                            ? 'text-yellow-300 font-bold'
+                            : 'text-slate-300'
+                        }`}>
                           ${price}
                         </td>
-                        <td className="pt-2 pb-1 text-right tabular-nums text-slate-500">
-                          {bank}
+                        <td className="pt-2 pb-1 text-right tabular-nums">
+                          {bank === 0
+                            ? <span className="text-red-400 text-[9px] font-semibold">Sold out</span>
+                            : bank <= 2
+                              ? <span className="text-amber-400 font-semibold">{bank}</span>
+                              : <span className="text-slate-500">{bank}</span>
+                          }
                         </td>
                       </tr>
 
@@ -1123,6 +1447,27 @@ export default function GamePage({ gameId, navigate }) {
                       </div>
                     </div>
 
+                    {/* Live summary — only shown when the player has made at least one choice */}
+                    {(mergerSell > 0 || mergerTrade > 0) && (
+                      <div className="bg-slate-900/70 border border-slate-700 rounded-lg px-3 py-2 text-xs space-y-0.5">
+                        {mergerSell > 0 && (
+                          <p className="text-green-400">
+                            Selling {mergerSell} share{mergerSell !== 1 ? 's' : ''} → <span className="font-bold">+{formatDollars(mergerSell * defunctPrice)}</span>
+                          </p>
+                        )}
+                        {mergerTrade > 0 && survivorChain && (
+                          <p className="text-blue-300">
+                            Trading {mergerTrade} → <span className="font-bold">{mergerTrade / 2} {CHAIN_LABELS[survivorChain]}</span> share{mergerTrade / 2 !== 1 ? 's' : ''}
+                          </p>
+                        )}
+                        {mergerKeep > 0 && (
+                          <p className="text-slate-500">
+                            Keeping {mergerKeep} {CHAIN_LABELS[currentDefunct]} share{mergerKeep !== 1 ? 's' : ''}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
                     <button
                       onClick={handleMergerDecision}
                       disabled={submittingDecision || mergerKeep < 0}
@@ -1148,6 +1493,11 @@ export default function GamePage({ gameId, navigate }) {
               {/* ── Tile hand (PLACE_TILE phase or spectating) ── */}
               {(isPlacePhase || !isMyTurn) && (
                 <div className="flex flex-col gap-2">
+                  {tileError && (
+                    <div className="bg-red-950/60 border border-red-700 text-red-300 rounded-lg px-3 py-2 text-xs font-medium">
+                      ⚠ {tileError}
+                    </div>
+                  )}
                   <span className="text-slate-500 text-xs uppercase tracking-wider">
                     {isMyTurn && isPlacePhase ? 'Your turn — place a tile:' : 'Your tiles:'}
                   </span>
@@ -1201,7 +1551,7 @@ export default function GamePage({ gameId, navigate }) {
                     // Confirmation card — two-step so the player can't retire by accident
                     <div className="flex items-center gap-2 bg-red-950/60 border border-red-700/60 rounded-lg px-3 py-2">
                       <span className="text-red-300 text-xs font-medium">
-                        Retire permanently? Your tiles are discarded.
+                        Retire permanently? Your tiles are discarded, but you keep all stocks and cash — and still receive merger bonuses.
                       </span>
                       <button
                         onClick={handleRetire}
@@ -1275,6 +1625,9 @@ export default function GamePage({ gameId, navigate }) {
                           >
                             <span className="text-xs font-semibold">{CHAIN_LABELS[name]}</span>
                             <span className="text-[10px] opacity-70">${price}</span>
+                            {publicState.stockBank[name] <= 2 && (
+                              <span className="text-[9px] text-amber-400 font-semibold">({publicState.stockBank[name]} left)</span>
+                            )}
                             <button onClick={() => adjustStock(name, -1)} disabled={qty === 0}
                               className="w-5 h-5 rounded bg-black/20 hover:bg-black/40 disabled:opacity-30 font-bold text-xs flex items-center justify-center">−</button>
                             <span className="w-4 text-center font-bold tabular-nums text-sm">{qty}</span>
@@ -1351,9 +1704,10 @@ export default function GamePage({ gameId, navigate }) {
                   <button
                     key={name}
                     onClick={() => handleChainChosen(name)}
-                    className={`py-3 px-4 rounded-xl font-bold text-sm transition-all hover:scale-105 active:scale-95 ${color.bg} ${color.text}`}
+                    className={`py-3 px-4 rounded-xl font-bold text-sm transition-all hover:scale-105 active:scale-95 flex flex-col items-center gap-0.5 ${color.bg} ${color.text}`}
                   >
-                    {CHAIN_LABELS[name]}
+                    <span>{CHAIN_LABELS[name]}</span>
+                    <span className="text-[10px] font-normal opacity-60">{CHAIN_TIER_LABEL[name]}</span>
                   </button>
                 );
               })}

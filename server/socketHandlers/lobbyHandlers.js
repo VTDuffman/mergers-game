@@ -1,3 +1,7 @@
+// NOT IN USE — legacy Socket.io handler from the pre-Supabase architecture.
+// All lobby actions now flow through server/routes/invites.js and server/routes/games.js.
+// Safe to delete once the Socket.io infrastructure is fully removed.
+
 import {
   createRoom,
   getRoom,

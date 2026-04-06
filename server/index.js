@@ -2,6 +2,11 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
+// NOT IN USE — these Socket.io handlers are a legacy artifact from an earlier architecture
+// where the game ran over WebSockets. All game actions now flow through REST routes
+// (server/routes/games.js) with client-side polling. The handlers are still imported
+// to avoid a startup crash (they reference shared game modules), but no client emits
+// the events they listen for. Safe to delete in a future cleanup pass.
 import { registerLobbyHandlers } from './socketHandlers/lobbyHandlers.js';
 import { registerGameHandlers }  from './socketHandlers/gameHandlers.js';
 import authRouter   from './routes/auth.js';
