@@ -4,7 +4,9 @@
       "Bash(npm install:*)",
       "Bash(git show:*)",
       "Bash(node:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(cmd.exe:*)",
+      "Bash(powershell.exe:*)"
     ]
   }
 }

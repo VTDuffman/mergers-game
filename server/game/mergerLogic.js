@@ -91,6 +91,9 @@ export function computeAndPayBonuses(gameState, defunctChain, { skipBankRule = f
     if (p) p.cash += amount;
   }
 
+  // House rule: each tied player receives their share rounded UP to the nearest $100.
+  // This means the bank may pay out slightly more than the nominal bonus in 3-way+ ties.
+  // Example: $500 minority bonus split 3 ways → $200 each ($600 total). Intentional.
   function splitAmong(pool, group, label) {
     if (group.length === 0) return;
     const each = roundUp100(pool / group.length);

@@ -87,6 +87,26 @@ function getRankedHolders(players, chainName) {
   });
 }
 
+// Plays a two-note ascending chime via Web Audio API — no audio file needed.
+function playTurnChime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [523, 659].forEach((freq, i) => {
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = freq;
+      osc.type = 'sine';
+      const t = ctx.currentTime + i * 0.18;
+      gain.gain.setValueAtTime(0.25, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+      osc.start(t);
+      osc.stop(t + 0.28);
+    });
+  } catch (_) { /* browsers may block AudioContext before a user gesture */ }
+}
+
 // ============================================================
 // AnimatedDollar
 // Smoothly counts a dollar value up or down whenever it changes.
@@ -165,13 +185,16 @@ export default function GamePage({ gameId, navigate }) {
   const [retiring,           setRetiring]           = useState(false);
   const [restarting,         setRestarting]         = useState(false);
   const [actionError,        setActionError]        = useState('');
+  const [logHasNew,          setLogHasNew]          = useState(false);
+  const [shakingTile,        setShakingTile]        = useState(null);
 
   const pollingRef = useRef(null);
   const logRef     = useRef(null);  // bottom-anchor for the game log auto-scroll
 
   // ── Animation refs ──
   // Track the previous board to detect newly-placed tiles (for tile-drop spring)
-  const prevBoardRef = useRef(null);
+  const prevBoardRef    = useRef(null);
+  const prevIsMyTurnRef = useRef(false);
   const [justPlacedTiles, setJustPlacedTiles] = useState(new Set());
   // Track previous shareholder ranks to detect new majority holders (for takeover flash)
   const prevRanksRef = useRef({});
@@ -214,10 +237,16 @@ export default function GamePage({ gameId, navigate }) {
     return () => clearInterval(pollingRef.current);
   }, [fetchState, pollInterval]);
 
-  // Auto-scroll the game log to the bottom whenever a new entry arrives
+  // Auto-scroll the game log only when already near the bottom; show "↓ New" badge otherwise
   useEffect(() => {
-    if (logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
+    const el = logRef.current;
+    if (!el) return;
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    if (isNearBottom) {
+      el.scrollTop = el.scrollHeight;
+      setLogHasNew(false);
+    } else {
+      setLogHasNew(true);
     }
   }, [publicState?.log?.length]);
 
@@ -318,6 +347,23 @@ export default function GamePage({ gameId, navigate }) {
 
   const totalStocksToBuy = Object.values(stocksToBuy).reduce((s, q) => s + q, 0);
 
+  // Update document title and play a chime when it becomes this player's turn
+  useEffect(() => {
+    if (isMyTurn && !prevIsMyTurnRef.current) {
+      playTurnChime();
+      if (document.hidden) document.title = '⚡ Your Turn! — Mergers';
+    } else if (!isMyTurn) {
+      document.title = 'Mergers';
+    }
+    prevIsMyTurnRef.current = isMyTurn;
+
+    function handleVisibility() {
+      if (!document.hidden) document.title = 'Mergers';
+    }
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [isMyTurn]);
+
   // ============================================================
   // Turn actions
   // ============================================================
@@ -325,7 +371,13 @@ export default function GamePage({ gameId, navigate }) {
   async function handleTileClick(tileId) {
     if (!isMyTurn || !isPlacePhase || placing) return;
     const cls = tileClassifications[tileId];
-    if (!cls || cls === 'illegal') return;
+    if (!cls || cls === 'illegal') {
+      if (isMyTurn && isPlacePhase) {
+        setShakingTile(tileId);
+        setTimeout(() => setShakingTile(null), 350);
+      }
+      return;
+    }
     setActionError('');
 
     if (cls === 'found') {
@@ -695,13 +747,16 @@ export default function GamePage({ gameId, navigate }) {
                   const clickable = isMyTurn && isPlacePhase && !placing
                     && inHand && cls !== 'illegal';
 
-                  const isNew = justPlacedTiles.has(tileId);
+                  const isNew     = justPlacedTiles.has(tileId);
+                  const isShaking = shakingTile === tileId;
                   return (
                     // motion.div is the grid item; scale animation is purely visual (no layout shift)
                     <motion.div
                       key={tileId}
-                      animate={isNew ? { scale: [1.45, 1] } : {}}
-                      transition={{ type: 'spring', stiffness: 380, damping: 14 }}
+                      animate={isShaking ? { x: [0, -5, 5, -5, 5, 0] } : isNew ? { scale: [1.45, 1] } : {}}
+                      transition={isShaking
+                        ? { duration: 0.35, ease: 'easeInOut' }
+                        : { type: 'spring', stiffness: 380, damping: 14 }}
                       style={{ zIndex: isNew ? 10 : undefined, position: 'relative' }}
                     >
                       <BoardCell
@@ -720,17 +775,35 @@ export default function GamePage({ gameId, navigate }) {
             </div>
           </div>
 
-          {/* Game log — scrollable, auto-scrolls to latest entry */}
+          {/* Game log — scrollable; "↓ New" badge shows when scrolled away from bottom */}
           {publicState.log?.length > 0 && (
             <div className="w-full max-w-4xl mx-auto mt-4 px-1">
               <p className="text-[10px] text-slate-600 uppercase tracking-wider mb-1">Game Log</p>
-              <div
-                ref={logRef}
-                className="max-h-36 overflow-y-auto space-y-0.5 pr-1"
-              >
-                {publicState.log.map((entry, i) => (
-                  <p key={i} className="text-[11px] text-slate-500">{entry.message}</p>
-                ))}
+              <div className="relative">
+                <div
+                  ref={logRef}
+                  className="max-h-36 overflow-y-auto space-y-0.5 pr-1"
+                  onScroll={() => {
+                    const el = logRef.current;
+                    if (!el) return;
+                    if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) setLogHasNew(false);
+                  }}
+                >
+                  {publicState.log.map((entry, i) => (
+                    <p key={i} className="text-[11px] text-slate-500">{entry.message}</p>
+                  ))}
+                </div>
+                {logHasNew && (
+                  <button
+                    onClick={() => {
+                      if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+                      setLogHasNew(false);
+                    }}
+                    className="absolute bottom-0 right-1 text-[10px] text-cyan-400 bg-slate-900 border border-cyan-800 rounded px-1.5 py-0.5"
+                  >
+                    ↓ New
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -1002,10 +1075,16 @@ export default function GamePage({ gameId, navigate }) {
                       <p className="text-slate-400 text-xs">
                         You hold <span className="text-white font-bold">{myDefunctShares}</span> shares
                         worth <span className="text-white font-bold">${defunctPrice}</span> each.
-                        {survivorChain && (
-                          <> Survivor: <span className="text-white font-bold">{CHAIN_LABELS[survivorChain] ?? survivorChain}</span>.</>
-                        )}
                       </p>
+                      {survivorChain && (
+                        <div className="flex items-center gap-1.5 mt-1">
+                          <span className="text-slate-500 text-xs">surviving as</span>
+                          <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full border ${CHAIN_COLORS[survivorChain]?.border ?? ''} ${CHAIN_COLORS[survivorChain]?.text ?? 'text-white'}`}>
+                            <span className={`w-2 h-2 rounded-sm ${CHAIN_COLORS[survivorChain]?.bg ?? ''}`} />
+                            {CHAIN_LABELS[survivorChain] ?? survivorChain}
+                          </span>
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex gap-3 flex-wrap">

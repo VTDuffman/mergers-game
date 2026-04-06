@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { requireAuth } from '../middleware/auth.js';
 import { supabase } from '../lib/supabase.js';
 import { sendInviteEmail, sendTurnNotificationEmail } from '../lib/email.js';
@@ -18,8 +19,24 @@ import {
 
 const router = Router();
 
+// Per-game lock to prevent concurrent merger-decision requests for the same game.
+// Cleared on each request completion (success or error).
+const mergerDecisionLocks = new Set();
+
+// Limit each authenticated user to 10 game-action write requests per 10 seconds.
+const gameActionLimiter = rateLimit({
+  windowMs: 10 * 1000,
+  max: 10,
+  keyGenerator: (req) => req.user?.id ?? req.ip,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests — slow down and try again in a moment.' },
+  skip: (req) => req.method === 'GET',
+});
+
 // Every game route requires a valid Supabase session.
 router.use(requireAuth);
+router.use(gameActionLimiter);
 
 // ============================================================
 // POST /api/games
@@ -807,6 +824,15 @@ router.post('/:gameId/merger-decision', async (req, res) => {
   const { gameId } = req.params;
   const { sell = 0, trade = 0 } = req.body;
 
+  // Belt-and-suspenders: reject concurrent/double-submit requests for the same game.
+  // Node.js is single-threaded but gaps around await points allow a second request
+  // to slip through validation before the first one has saved state.
+  if (mergerDecisionLocks.has(gameId)) {
+    return res.status(409).json({ error: 'A decision is already being processed for this game. Please retry in a moment.' });
+  }
+  mergerDecisionLocks.add(gameId);
+
+  try {
   const loaded = await loadState(gameId);
   if (!loaded) return res.status(500).json({ error: 'Could not load game state' });
   const { state, playerTiles } = loaded;
@@ -875,6 +901,9 @@ router.post('/:gameId/merger-decision', async (req, res) => {
   const saved = await saveState(gameId, state, playerTiles);
   if (saved.error) return res.status(500).json({ error: saved.error.message });
   res.json({ publicState: saved.publicState, myTiles: playerTiles[req.user.id] ?? [], drawPileCount: saved.drawPile.length });
+  } finally {
+    mergerDecisionLocks.delete(gameId);
+  }
 });
 
 // ============================================================
@@ -920,7 +949,12 @@ router.post('/:gameId/declare-end-game', async (req, res) => {
   const saved = await saveState(gameId, state, playerTiles);
   if (saved.error) return res.status(500).json({ error: saved.error.message });
 
-  await supabase.from('games').update({ status: 'COMPLETE' }).eq('id', gameId);
+  // Game state is already saved correctly (isGameOver: true).
+  // Log any failure but don't block the response — the game IS over.
+  const { error: completeError } = await supabase.from('games').update({ status: 'COMPLETE' }).eq('id', gameId);
+  if (completeError) {
+    console.error('[declare-end-game] Failed to mark game COMPLETE:', completeError.message);
+  }
 
   res.json({ publicState: saved.publicState, myTiles: playerTiles[req.user.id] ?? [], drawPileCount: saved.drawPile.length });
 });
@@ -1012,6 +1046,10 @@ router.post('/:gameId/end-turn', async (req, res) => {
   if (drawn.length > 0) {
     playerTiles[req.user.id] = [...(playerTiles[req.user.id] ?? []), ...drawn];
   }
+  if (state.drawPile.length === 0) {
+    state.log = [{ time: new Date().toISOString(), message: 'The draw pile is empty.' },
+      ...(state.log ?? [])].slice(0, 50);
+  }
 
   // Advance to the next non-retired player
   const numPlayers = state.players.length;
@@ -1043,6 +1081,30 @@ router.post('/:gameId/end-turn', async (req, res) => {
     const replacements = drawTiles(state.drawPile, unplayable.length);
     playerTiles[nextPlayer.id] = [...playerTiles[nextPlayer.id], ...replacements];
   }
+
+  // If draw pile is empty AND next player has no legal tiles, end the game immediately.
+  const nextHandFinal = playerTiles[nextPlayer.id] ?? [];
+  if (state.drawPile.length === 0 && nextHandFinal.length > 0) {
+    const allUnplayable = findUnplayableTiles(state, nextHandFinal);
+    if (allUnplayable.length === nextHandFinal.length) {
+      state.log = [{ time: new Date().toISOString(),
+        message: `${nextPlayer.name} has no legal tiles and the draw pile is empty — game over.` },
+        ...(state.log ?? [])].slice(0, 50);
+      const { logs, winnerId } = executeEndGamePayouts(state);
+      for (let i = logs.length - 1; i >= 0; i--) {
+        state.log = [{ time: new Date().toISOString(), message: logs[i] }, ...(state.log ?? [])].slice(0, 100);
+      }
+      state.isGameOver = true;
+      state.winner     = winnerId;
+      state.turnPhase  = 'GAME_OVER';
+      const saved = await saveState(gameId, state, playerTiles);
+      if (saved.error) return res.status(500).json({ error: saved.error.message });
+      const { error: completeError } = await supabase.from('games').update({ status: 'COMPLETE' }).eq('id', gameId);
+      if (completeError) console.error('[end-turn/draw-empty] Failed to mark game COMPLETE:', completeError.message);
+      return res.json({ publicState: saved.publicState, myTiles: playerTiles[req.user.id] ?? [], drawPileCount: 0 });
+    }
+  }
+
   state.log = [{
     time: new Date().toISOString(),
     message: `Turn passed to ${nextPlayer.name}`,
@@ -1125,7 +1187,14 @@ router.post('/:gameId/retire', async (req, res) => {
 
     const saved = await saveState(gameId, state, playerTiles);
     if (saved.error) return res.status(500).json({ error: saved.error.message });
-    await supabase.from('games').update({ status: 'COMPLETE' }).eq('id', gameId);
+
+    // Game state is already saved correctly (isGameOver: true).
+    // Log any failure but don't block the response — the game IS over.
+    const { error: completeError } = await supabase.from('games').update({ status: 'COMPLETE' }).eq('id', gameId);
+    if (completeError) {
+      console.error('[retire] Failed to mark game COMPLETE:', completeError.message);
+    }
+
     return res.json({ publicState: saved.publicState, myTiles: [], drawPileCount: saved.drawPile.length });
   }
 
