@@ -147,6 +147,9 @@ export default function GamePage({ gameId, navigate }) {
   const [ending,             setEnding]             = useState(false);
   const [submittingDecision, setSubmittingDecision] = useState(false);
   const [declaringEndGame,   setDeclaringEndGame]   = useState(false);
+  const [confirmingRetire,   setConfirmingRetire]   = useState(false);
+  const [retiring,           setRetiring]           = useState(false);
+  const [restarting,         setRestarting]         = useState(false);
   const [actionError,        setActionError]        = useState('');
 
   const pollingRef = useRef(null);
@@ -448,6 +451,35 @@ export default function GamePage({ gameId, navigate }) {
     }
   }
 
+  // ---- Play Again ----
+  async function handleRestart() {
+    setRestarting(true);
+    try {
+      const data = await api.restartGame(gameId);
+      applyServerResponse(data);
+    } catch (err) {
+      // Surface the error on the game-over screen via actionError
+      setActionError(err.message);
+    } finally {
+      setRestarting(false);
+    }
+  }
+
+  // ---- Retire ----
+  async function handleRetire() {
+    setRetiring(true);
+    setConfirmingRetire(false);
+    setActionError('');
+    try {
+      const data = await api.retire(gameId);
+      applyServerResponse(data);
+    } catch (err) {
+      setActionError(err.message);
+    } finally {
+      setRetiring(false);
+    }
+  }
+
   // ============================================================
   // Loading / error screens
   // ============================================================
@@ -521,12 +553,27 @@ export default function GamePage({ gameId, navigate }) {
             </div>
           )}
 
-          <button
-            onClick={navigate.toDashboard}
-            className="w-full bg-cyan-600 hover:bg-cyan-500 text-black font-bold py-3 rounded-xl transition-colors neon-glow-cyan"
-          >
-            Back to Dashboard
-          </button>
+          {actionError && (
+            <div className="bg-red-900/40 border border-red-700 text-red-300 text-xs rounded-lg px-3 py-2 mb-4">
+              {actionError}
+            </div>
+          )}
+
+          <div className="flex flex-col gap-3">
+            <button
+              onClick={handleRestart}
+              disabled={restarting}
+              className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors neon-glow-green"
+            >
+              {restarting ? 'Starting new game…' : 'Play Again'}
+            </button>
+            <button
+              onClick={navigate.toDashboard}
+              className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold py-3 rounded-xl transition-colors"
+            >
+              Back to Dashboard
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -972,6 +1019,40 @@ export default function GamePage({ gameId, navigate }) {
                       </button>
                     );
                   })}
+                </div>
+              )}
+
+              {/* ── Retire option (PLACE_TILE phase, my turn only) ── */}
+              {isMyTurn && isPlacePhase && (
+                <div className="flex justify-end">
+                  {confirmingRetire ? (
+                    // Confirmation card — two-step so the player can't retire by accident
+                    <div className="flex items-center gap-2 bg-red-950/60 border border-red-700/60 rounded-lg px-3 py-2">
+                      <span className="text-red-300 text-xs font-medium">
+                        Retire permanently? Your tiles are discarded.
+                      </span>
+                      <button
+                        onClick={handleRetire}
+                        disabled={retiring}
+                        className="bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white text-xs font-bold px-2.5 py-1 rounded transition-colors"
+                      >
+                        {retiring ? 'Retiring…' : 'Yes, retire'}
+                      </button>
+                      <button
+                        onClick={() => setConfirmingRetire(false)}
+                        className="text-slate-400 hover:text-white text-xs transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setConfirmingRetire(true)}
+                      className="text-slate-600 hover:text-red-400 text-xs transition-colors underline underline-offset-2"
+                    >
+                      Retire from game
+                    </button>
+                  )}
                 </div>
               )}
 

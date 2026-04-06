@@ -103,4 +103,12 @@ export const api = {
   // Declare the game over when end-game conditions are met (during BUY_STOCKS phase)
   declareEndGame: (gameId) =>
     request('POST', `/games/${gameId}/declare-end-game`),
+
+  // Retire: active player opts out instead of placing a tile (PLACE_TILE phase only)
+  retire: (gameId) =>
+    request('POST', `/games/${gameId}/retire`),
+
+  // Restart: any player can trigger a rematch once the game is COMPLETE
+  restartGame: (gameId) =>
+    request('POST', `/games/${gameId}/restart`),
 };

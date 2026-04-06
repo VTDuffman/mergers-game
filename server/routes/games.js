@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { supabase } from '../lib/supabase.js';
 import { sendInviteEmail, sendTurnNotificationEmail } from '../lib/email.js';
-import { createInitialGameState, getPublicGameState, checkEndGameConditions } from '../game/GameState.js';
+import { createInitialGameState, resetGameState, getPublicGameState, checkEndGameConditions } from '../game/GameState.js';
 import { classifyPlacement, getAdjacentChains, findUnplayableTiles } from '../game/boardLogic.js';
 import { foundChain, growChain } from '../game/chainLogic.js';
 import { validatePurchase, applyPurchase } from '../game/stockLogic.js';
@@ -1063,6 +1063,170 @@ router.post('/:gameId/end-turn', async (req, res) => {
     publicState: saved.publicState,
     myTiles: playerTiles[req.user.id] ?? [],
     drawPileCount: saved.drawPile.length,
+  });
+});
+
+// ============================================================
+// POST /api/games/:gameId/retire
+// Active player announces retirement instead of placing a tile.
+//
+// Rules (per Acquire):
+//   - Only valid during the PLACE_TILE phase on the player's own turn.
+//   - The player's entire tile hand is permanently discarded — those board
+//     positions can never be played for the rest of the game.
+//   - The player is marked isRetired = true and skipped in all future turns.
+//   - They keep their cash and stocks; both are paid out at end game.
+//   - If ALL players are now retired, the game ends immediately: full payouts
+//     run automatically and the game transitions to COMPLETE.
+// ============================================================
+router.post('/:gameId/retire', async (req, res) => {
+  const { gameId } = req.params;
+
+  const { data: game } = await supabase
+    .from('games').select('status, name').eq('id', gameId).single();
+  if (!game || game.status !== 'ACTIVE') return res.status(400).json({ error: 'Game is not active' });
+
+  const loaded = await loadState(gameId);
+  if (!loaded) return res.status(500).json({ error: 'Could not load game state' });
+  const { state, playerTiles } = loaded;
+
+  const activePlayer = state.players[state.activePlayerIndex];
+  if (activePlayer.id !== req.user.id)  return res.status(403).json({ error: 'It is not your turn' });
+  if (state.turnPhase !== 'PLACE_TILE') return res.status(400).json({ error: 'You can only retire at the start of your turn' });
+  if (activePlayer.isRetired)           return res.status(400).json({ error: 'You are already retired' });
+
+  // Permanently discard the player's hand.
+  // Positions are tracked in retiredTilePositions (never re-enter the draw pile).
+  const hand = playerTiles[req.user.id] ?? [];
+  state.retiredTilePositions = [...(state.retiredTilePositions ?? []), ...hand];
+  playerTiles[req.user.id] = [];
+
+  activePlayer.isRetired = true;
+  state.log = [{
+    time: new Date().toISOString(),
+    message: `${activePlayer.name} has retired. Their ${hand.length} tile(s) are permanently removed from play.`,
+  }, ...(state.log ?? [])].slice(0, 50);
+
+  // If every player is now retired the game ends immediately — no one is left to play.
+  const activePlayers = state.players.filter(p => !p.isRetired);
+  if (activePlayers.length === 0) {
+    state.log = [{
+      time: new Date().toISOString(),
+      message: 'All players have retired — triggering final payouts.',
+    }, ...(state.log ?? [])].slice(0, 100);
+
+    const { logs, winnerId } = executeEndGamePayouts(state);
+    for (let i = logs.length - 1; i >= 0; i--) {
+      state.log = [{ time: new Date().toISOString(), message: logs[i] }, ...(state.log ?? [])].slice(0, 100);
+    }
+    state.isGameOver = true;
+    state.winner     = winnerId;
+    state.turnPhase  = 'GAME_OVER';
+
+    const saved = await saveState(gameId, state, playerTiles);
+    if (saved.error) return res.status(500).json({ error: saved.error.message });
+    await supabase.from('games').update({ status: 'COMPLETE' }).eq('id', gameId);
+    return res.json({ publicState: saved.publicState, myTiles: [], drawPileCount: saved.drawPile.length });
+  }
+
+  // Advance to the next non-retired player.
+  // Uses the same loop pattern as end-turn to correctly skip over any
+  // other retired players who may have retired in earlier turns.
+  const numPlayers = state.players.length;
+  let nextIdx = state.activePlayerIndex;
+  for (let i = 1; i <= numPlayers; i++) {
+    nextIdx = (state.activePlayerIndex + i) % numPlayers;
+    if (!state.players[nextIdx].isRetired) break;
+  }
+  if (nextIdx <= state.activePlayerIndex && nextIdx !== state.activePlayerIndex) {
+    state.turnNumber += 1;
+  }
+  state.activePlayerIndex = nextIdx;
+  state.turnPhase         = 'PLACE_TILE';
+  state.hasActedThisTurn  = false;
+
+  const nextPlayer = state.players[nextIdx];
+  state.log = [{
+    time: new Date().toISOString(),
+    message: `It is now ${nextPlayer.name}'s turn.`,
+  }, ...(state.log ?? [])].slice(0, 50);
+
+  const saved = await saveState(gameId, state, playerTiles);
+  if (saved.error) return res.status(500).json({ error: saved.error.message });
+
+  // Notify the next player by email (non-blocking — same pattern as end-turn)
+  const { data: nextUser } = await supabase
+    .from('users').select('email').eq('id', nextPlayer.id).single();
+  if (nextUser?.email) {
+    sendTurnNotificationEmail(nextUser.email, game.name, gameId)
+      .catch(err => console.error('[retire] Failed to send turn notification:', err.message));
+  }
+
+  res.json({
+    publicState:  saved.publicState,
+    myTiles:      [],           // retired players have no tiles
+    drawPileCount: saved.drawPile.length,
+  });
+});
+
+// ============================================================
+// POST /api/games/:gameId/restart
+// Any confirmed player can trigger a rematch once the game is COMPLETE.
+//
+// Reuses the same game ID and the same player roster. Everything else —
+// tile shuffle, player hands, board, chains, cash, stocks — is reset to
+// a fresh initial state identical to what /start produces.
+// ============================================================
+router.post('/:gameId/restart', async (req, res) => {
+  const { gameId } = req.params;
+
+  // Game must be finished before anyone can restart it
+  const { data: game } = await supabase
+    .from('games').select('status').eq('id', gameId).single();
+  if (!game)                        return res.status(404).json({ error: 'Game not found' });
+  if (game.status !== 'COMPLETE')   return res.status(400).json({ error: 'Game is not over yet' });
+
+  // Load the finished state so we can extract the player roster
+  const loaded = await loadState(gameId);
+  if (!loaded) return res.status(500).json({ error: 'Could not load game state' });
+  const { state } = loaded;
+
+  // Caller must be one of the confirmed players (not just any authenticated user)
+  const isPlayer = state.players.some(p => p.id === req.user.id);
+  if (!isPlayer) return res.status(403).json({ error: 'You are not a player in this game' });
+
+  // Build a fresh state from the existing player list.
+  // resetGameState strips cash/stocks/retirement back to starting values,
+  // re-shuffles all 108 tiles, and deals 6 fresh tiles to each player.
+  const { newGameState, newPlayerTiles } = resetGameState(state);
+
+  // Persist: overwrite game_states with the fresh state
+  const { drawPile, ...newPublicState } = newGameState;
+  const { error: saveError } = await supabase
+    .from('game_states')
+    .update({
+      public_state: newPublicState,
+      player_tiles:  newPlayerTiles,
+      draw_pile:     drawPile,
+      updated_at:    new Date().toISOString(),
+    })
+    .eq('game_id', gameId);
+
+  if (saveError) return res.status(500).json({ error: saveError.message });
+
+  // Flip the game record back to ACTIVE
+  const { error: statusError } = await supabase
+    .from('games')
+    .update({ status: 'ACTIVE' })
+    .eq('id', gameId);
+
+  if (statusError) return res.status(500).json({ error: statusError.message });
+
+  // Return the new public state + the requesting player's private tile hand
+  res.json({
+    publicState:   newPublicState,
+    myTiles:       newPlayerTiles[req.user.id] ?? [],
+    drawPileCount: drawPile.length,
   });
 });
 
